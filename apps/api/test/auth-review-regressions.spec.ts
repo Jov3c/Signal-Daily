@@ -37,6 +37,16 @@ import {
 } from './support/test-app';
 import { createAuthTestApp } from './support/test-app';
 import { createTestEnv } from '@signal/test-utils';
+import { OtpService } from '../src/modules/auth/otp.service';
+import { AccessTokenService } from '../src/modules/auth/access-token.service';
+import { SessionService } from '../src/modules/auth/session.service';
+import type { AuthRepository } from '../src/modules/auth/repository';
+import {
+  FakeClock,
+  InMemoryAuthRepository,
+  InMemoryUserRepository,
+  createTestAuthConfig,
+} from './support/fakes';
 
 const REQUEST_CODE_PATH = '/api/v1/auth/email/request-code';
 const VERIFY_PATH = '/api/v1/auth/email/verify';
@@ -139,51 +149,85 @@ describe('P2-2 登出必须覆盖「只用 Authorization 头」的客户端', ()
 /* ------------------------------------------------------------------ */
 
 describe('P3-3a/b access token 的算法与 iss·aud 锁定有牙齿', () => {
-  const sign = (
+  /**
+   * ⚠ 这里必须用**真实存在的会话**（sid 与 sub 都对得上）。
+   * 早期版本随便写了 sid='1'，于是 token 校验被绕过时 401 依然会出现
+   * —— 只是原因变成了「会话不存在」。那种测试在反证里不会变红（实测确认）。
+   * 现在每个用例都配一条「同样载荷、正确算法 → 200」的对照，
+   * 因此唯一的差别就只剩被断言的那个校验点。
+   */
+  async function realClaims(
     test: AuthTestApp,
-    payload: Record<string, unknown>,
+  ): Promise<{ sub: string; sid: string; cookie: string }> {
+    const cookies = await login(test);
+    const session = test.authRepository.sessions.at(-1);
+    if (session === undefined) throw new Error('登录后应当有会话');
+    return { sub: session.userId, sid: session.id, cookie: cookieHeader(cookies) };
+  }
+
+  const signWith = (
+    test: AuthTestApp,
+    claims: { sub: string; sid: string },
     options: jwt.SignOptions = {},
   ): string =>
-    jwt.sign(payload, test.config.accessTokenSecret, {
+    jwt.sign({ sid: claims.sid, role: 'USER' }, test.config.accessTokenSecret, {
       algorithm: 'HS256',
-      subject: '1',
+      subject: claims.sub,
       issuer: ACCESS_TOKEN_ISSUER,
       audience: ACCESS_TOKEN_AUDIENCE,
       expiresIn: 900,
       ...options,
     });
 
-  it('用同一密钥、但换成 HS512 签发的 token 必须被拒（算法锁定）', async () => {
+  it('换成 HS512 签发必须被拒，而同样载荷的 HS256 必须通过（算法锁定）', async () => {
     const test = await boot();
-    // 若把 `algorithms: ['HS256']` 去掉，jsonwebtoken 会接受 HS512 —— 这条会红。
-    const hs512 = sign(test, { sid: '1', role: 'USER' }, { algorithm: 'HS512' });
+    const claims = await realClaims(test);
 
-    const response = await test.request(ME_PATH, {
-      headers: { authorization: `Bearer ${hs512}` },
+    const ok = await test.request(ME_PATH, {
+      headers: { authorization: `Bearer ${signWith(test, claims)}` },
     });
-    expect(response.status).toBe(401);
-  });
+    expect(ok.status).toBe(200);
 
-  it('issuer 不对 → 401', async () => {
-    const test = await boot();
-    const wrongIssuer = sign(test, { sid: '1', role: 'USER' }, { issuer: 'evil-issuer' });
-
+    const hs512 = signWith(test, claims, { algorithm: 'HS512' });
     expect(
-      (await test.request(ME_PATH, { headers: { authorization: `Bearer ${wrongIssuer}` } })).status,
+      (await test.request(ME_PATH, { headers: { authorization: `Bearer ${hs512}` } })).status,
     ).toBe(401);
   });
 
-  it('audience 不对 → 401', async () => {
+  it('issuer 不对必须被拒，正确 issuer 必须通过', async () => {
     const test = await boot();
-    const wrongAudience = sign(test, { sid: '1', role: 'USER' }, { audience: 'other-service' });
+    const claims = await realClaims(test);
+
+    const wrong = signWith(test, claims, { issuer: 'evil-issuer' });
+    expect(
+      (await test.request(ME_PATH, { headers: { authorization: `Bearer ${wrong}` } })).status,
+    ).toBe(401);
 
     expect(
       (
         await test.request(ME_PATH, {
-          headers: { authorization: `Bearer ${wrongAudience}` },
+          headers: { authorization: `Bearer ${signWith(test, claims)}` },
         })
       ).status,
+    ).toBe(200);
+  });
+
+  it('audience 不对必须被拒，正确 audience 必须通过', async () => {
+    const test = await boot();
+    const claims = await realClaims(test);
+
+    const wrong = signWith(test, claims, { audience: 'other-service' });
+    expect(
+      (await test.request(ME_PATH, { headers: { authorization: `Bearer ${wrong}` } })).status,
     ).toBe(401);
+
+    expect(
+      (
+        await test.request(ME_PATH, {
+          headers: { authorization: `Bearer ${signWith(test, claims)}` },
+        })
+      ).status,
+    ).toBe(200);
   });
 });
 
@@ -191,8 +235,31 @@ describe('P3-3a/b access token 的算法与 iss·aud 锁定有牙齿', () => {
 /* P3-3c OTP 哈希绑邮箱                                                 */
 /* ------------------------------------------------------------------ */
 
-describe('P3-3c 验证码哈希绑定邮箱', () => {
-  it('给 A 邮箱发的码，拿去验 B 邮箱必须失败', async () => {
+describe('P3-3c 验证码哈希绑定邮箱（直接断言这条不变量）', () => {
+  /**
+   * ⚠ 早期版本用「给 A 发的码拿去验 B」来证明绑定，但那条路径 401 的真实原因是
+   * 「B 根本没有未消费的码」—— 与哈希是否绑邮箱无关，反证时不会变红（实测确认）。
+   * 哈希绑邮箱本身是一个**密码学属性**，就直接断言它。
+   */
+  it('同一个验证码在不同邮箱下的哈希必须不同（且不等于明文）', () => {
+    const service = new OtpService(
+      new InMemoryAuthRepository(),
+      createTestAuthConfig(),
+      new FakeClock(),
+      () => TEST_OTP_CODE,
+    );
+
+    const alice = service.hashCode('alice@example.com', TEST_OTP_CODE);
+    const bob = service.hashCode('bob@example.com', TEST_OTP_CODE);
+
+    // 去掉实现里的 `${email}:` 后这两个值会相等 —— 这条会红。
+    expect(alice).not.toBe(bob);
+    expect(alice).toMatch(/^[0-9a-f]{64}$/);
+    expect(alice).not.toContain(TEST_OTP_CODE);
+    expect(service.hashCode('alice@example.com', TEST_OTP_CODE)).toBe(alice);
+  });
+
+  it('给某个邮箱发的码只对那个邮箱有效（HTTP 层确认）', async () => {
     const test = await boot({ otpCodes: [TEST_OTP_CODE] });
 
     await test.request(REQUEST_CODE_PATH, {
@@ -235,6 +302,52 @@ describe('P2-5 并发 refresh：严格轮换的后果必须被测试固定下来
     // 失败的一方被判定为「重放已轮换的 token」→ 视为凭据泄露
     expect(await errorCode(failed)).toBe(DomainErrorCode.AUTH_SESSION_REVOKED);
     expect(test.authRepository.sessions.every((s) => s.revokedAt !== null)).toBe(true);
+  });
+
+  it('★ 轮换竞态的败者必须撤销全部会话，且绝不能签发新会话（直接模拟竞态）', async () => {
+    /**
+     * ⚠ 上面那条 HTTP 用例**测不到** `if (!revoked)` 这个判定：
+     * 在本地串行化的请求里，第二个请求会先撞上更早的那条
+     * 「token 已撤销 → 重放」分支，根本走不到这里。
+     * 所以这里直接构造真正的竞态：两个请求都通过了「会话仍有效」的检查，
+     * 但条件更新时只有一方能改成功 —— 输的一方必须被当作重放处理。
+     */
+    const config = createTestAuthConfig();
+    const users = new InMemoryUserRepository();
+    const user = users.seed({ email: 'race@example.com' });
+    const revokedAll: string[] = [];
+
+    const repository = {
+      findSessionByRefreshHash: async () => ({
+        id: '9',
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        revokedAt: null,
+      }),
+      // 模拟「另一个请求刚刚把它撤销掉了」：条件更新影响 0 行
+      revokeSession: async () => false,
+      revokeAllSessionsForUser: async (userId: string) => {
+        revokedAll.push(userId);
+        return 1;
+      },
+      // 走到这里就说明败者拿到了新凭据 —— 这正是要防的事
+      createSession: async () => {
+        throw new Error('竞态败者不得签发新会话');
+      },
+    } as unknown as AuthRepository;
+
+    const service = new SessionService(
+      repository,
+      users,
+      config,
+      new FakeClock(),
+      new AccessTokenService(config),
+    );
+
+    await expect(
+      service.rotate('a-refresh-token', { ip: undefined, userAgent: undefined }),
+    ).rejects.toMatchObject({ code: DomainErrorCode.AUTH_SESSION_REVOKED });
+    expect(revokedAll).toEqual([user.id]);
   });
 });
 
