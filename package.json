@@ -21,13 +21,13 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:reset": "prisma migrate reset --force",
-    "db:seed": "tsc -b prisma && node prisma/dist/seed.js",
+    "db:seed": "tsc -b prisma && prisma db seed",
     "db:studio": "prisma studio",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\" \"prisma/dist\" \"packages/*/*.tsbuildinfo\" \"apps/*/*.tsbuildinfo\" \"*.tsbuildinfo\"",
     "verify": "pnpm lint && pnpm typecheck && pnpm test"
   },
   "prisma": {
-    "seed": "tsc -b prisma && node prisma/dist/seed.js"
+    "seed": "node prisma/dist/seed.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

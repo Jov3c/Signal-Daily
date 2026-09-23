@@ -43,6 +43,10 @@ const prisma = new PrismaClient({ datasources: { db: { url: DATABASE_URL } } });
 /** 测试数据的识别前缀，便于清理。 */
 const TAG = 'itest01';
 
+let seq = 0;
+/** 生成全局唯一后缀，避免同一测试内多次建同名 slug/email 撞唯一约束。 */
+const uniq = (): string => `${TAG}-${Date.now()}-${seq++}`;
+
 /** 期望存在的表（docs/03）。 */
 const EXPECTED_TABLES = [
   'users',
@@ -261,7 +265,7 @@ describe('Event / EventEvidence', () => {
     const source = await prisma.source.create({
       data: {
         name: `${TAG} ev source`,
-        slug: `${TAG}-ev-source`,
+        slug: uniq(),
         type: SourceType.RSS,
         kind: SourceKind.MEDIA,
       },
@@ -427,7 +431,7 @@ describe('Event / EventEvidence', () => {
 describe('用户能力：Bookmark / ReadingProgress / UserPreference', () => {
   async function createUser(): Promise<bigint> {
     const user = await prisma.user.create({
-      data: { email: `${TAG}-${Date.now()}@example.com`, role: 'USER' },
+      data: { email: `${uniq()}@example.com`, role: 'USER' },
     });
     return user.id;
   }
@@ -450,7 +454,7 @@ describe('用户能力：Bookmark / ReadingProgress / UserPreference', () => {
     const source = await prisma.source.create({
       data: {
         name: `${TAG} u source`,
-        slug: `${TAG}-u-source-${Date.now()}`,
+        slug: uniq(),
         type: SourceType.RSS,
         kind: SourceKind.MEDIA,
       },
