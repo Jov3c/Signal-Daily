@@ -29,16 +29,16 @@
 
 ### 1. Email OTP 登录（`docs/11`：6 位 / 10 分钟 / hash 存储 / 限流 / 防重放）
 
-| 项 | 实现 |
-| --- | --- |
-| 验证码 | `crypto.randomInt`（CSPRNG）生成 6 位数字 |
-| 存储 | `HMAC-SHA256(EMAIL_OTP_PEPPER, "signal:otp:v1:<email>:<code>")`，只存 64 位 hex；**库中无明文字段** |
-| 时效 | 10 分钟（`expiresAt`），过期即失效 |
-| 消费 | `updateMany({ where: { id, consumedAt: null } })` + 影响行数判定 —— 并发下只有一个请求能消费成功 |
-| 重放 | 已被消费的码再次提交 → `AUTH_OTP_ALREADY_USED`（与「码错误」区分开） |
-| 防枚举 | 无论邮箱是否已注册，`request-code` 一律返回 `{sent:true,expiresInSeconds:600}` |
-| 作废旧码 | 每次 `request-code` 在一个事务里先作废该邮箱未消费的码，再插入新码 |
-| 写冲突 | 并发 `request-code` 的 InnoDB 写冲突（P2034）做有限重试，不再冒泡成 500 |
+| 项       | 实现                                                                                                |
+| -------- | --------------------------------------------------------------------------------------------------- |
+| 验证码   | `crypto.randomInt`（CSPRNG）生成 6 位数字                                                           |
+| 存储     | `HMAC-SHA256(EMAIL_OTP_PEPPER, "signal:otp:v1:<email>:<code>")`，只存 64 位 hex；**库中无明文字段** |
+| 时效     | 10 分钟（`expiresAt`），过期即失效                                                                  |
+| 消费     | `updateMany({ where: { id, consumedAt: null } })` + 影响行数判定 —— 并发下只有一个请求能消费成功    |
+| 重放     | 已被消费的码再次提交 → `AUTH_OTP_ALREADY_USED`（与「码错误」区分开）                                |
+| 防枚举   | 无论邮箱是否已注册，`request-code` 一律返回 `{sent:true,expiresInSeconds:600}`                      |
+| 作废旧码 | 每次 `request-code` 在一个事务里先作废该邮箱未消费的码，再插入新码                                  |
+| 写冲突   | 并发 `request-code` 的 InnoDB 写冲突（P2034）做有限重试，不再冒泡成 500                             |
 
 首次验证通过即注册（`findOrCreateByEmail`，同时写默认 `UserPreference`）。
 
@@ -75,12 +75,12 @@
 
 ### 6. 公共地基（Agent 02 落地，**下游复用，勿重复实现**）
 
-| 位置 | 内容 |
-| --- | --- |
-| `common/prisma/` | `PrismaService`（`@Global()`）、`toBigIntId`/`toIdString`、`toContractEnum`（Prisma↔契约枚举桥接） |
-| `common/http/` | 统一错误封套 `APP_FILTER`、requestId 解析、Cookie 序列化/解析 |
-| `common/logger/` | `APP_LOGGER` 注入点（`main.ts` 用它接管 Nest 内部日志） |
-| `common/common.module.ts` | 汇总以上并 `@Global()` |
+| 位置                      | 内容                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| `common/prisma/`          | `PrismaService`（`@Global()`）、`toBigIntId`/`toIdString`、`toContractEnum`（Prisma↔契约枚举桥接） |
+| `common/http/`            | 统一错误封套 `APP_FILTER`、requestId 解析、Cookie 序列化/解析                                      |
+| `common/logger/`          | `APP_LOGGER` 注入点（`main.ts` 用它接管 Nest 内部日志）                                            |
+| `common/common.module.ts` | 汇总以上并 `@Global()`                                                                             |
 
 ---
 
@@ -176,15 +176,15 @@ import appErrorFilter 相关：见 common/http（**不要重复注册**）
 
 ### 本模块对外契约（与 `docs/04` 逐字一致）
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| POST | `/api/v1/auth/email/request-code` | `{email}` → `{data:{sent:true,expiresInSeconds}}` |
-| POST | `/api/v1/auth/email/verify` | `{email,code}` → `{data:{user,accessTokenExpiresInSeconds}}` + 会话 Cookie |
-| GET | `/api/v1/auth/github` | 302 到 GitHub（未配置 → 503） |
-| GET | `/api/v1/auth/github/callback` | 302 回站点；失败 → JSON 错误（`AUTH_OAUTH_STATE_INVALID` 等） |
-| POST | `/api/v1/auth/refresh` | 读 refresh Cookie → `{data:{user,...}}` + 轮换后的 Cookie |
-| POST | `/api/v1/auth/logout` | → `{data:{loggedOut:true}}` + 清除 Cookie（幂等） |
-| GET | `/api/v1/me` | `{data:{id,email,displayName,avatarUrl,role,createdAt}}`（需认证） |
+| 方法 | 路径                              | 说明                                                                       |
+| ---- | --------------------------------- | -------------------------------------------------------------------------- |
+| POST | `/api/v1/auth/email/request-code` | `{email}` → `{data:{sent:true,expiresInSeconds}}`                          |
+| POST | `/api/v1/auth/email/verify`       | `{email,code}` → `{data:{user,accessTokenExpiresInSeconds}}` + 会话 Cookie |
+| GET  | `/api/v1/auth/github`             | 302 到 GitHub（未配置 → 503）                                              |
+| GET  | `/api/v1/auth/github/callback`    | 302 回站点；失败 → JSON 错误（`AUTH_OAUTH_STATE_INVALID` 等）              |
+| POST | `/api/v1/auth/refresh`            | 读 refresh Cookie → `{data:{user,...}}` + 轮换后的 Cookie                  |
+| POST | `/api/v1/auth/logout`             | → `{data:{loggedOut:true}}` + 清除 Cookie（幂等）                          |
+| GET  | `/api/v1/me`                      | `{data:{id,email,displayName,avatarUrl,role,createdAt}}`（需认证）         |
 
 路由表**精确等于**上表 7 条（有测试枚举 express 路由表做守卫，多一条即红）。
 
@@ -220,11 +220,11 @@ import appErrorFilter 相关：见 common/http（**不要重复注册**）
 
 ### 邮件通道（重要，本地登录要用）
 
-| 条件 | 行为 |
-| --- | --- |
-| 配了 `SMTP_HOST` + `SMTP_FROM` | 真实 SMTP 投递（nodemailer） |
-| 未配 + `NODE_ENV=production` | **503 `AUTH_MAIL_NOT_CONFIGURED`**，绝不降级 |
-| 未配 + 非生产 | 把验证码写到 **stderr**（`[signal dev-mail] ... code=xxxxxx`），本地才登得进去 |
+| 条件                           | 行为                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| 配了 `SMTP_HOST` + `SMTP_FROM` | 真实 SMTP 投递（nodemailer）                                                   |
+| 未配 + `NODE_ENV=production`   | **503 `AUTH_MAIL_NOT_CONFIGURED`**，绝不降级                                   |
+| 未配 + 非生产                  | 把验证码写到 **stderr**（`[signal dev-mail] ... code=xxxxxx`），本地才登得进去 |
 
 设计取舍：`docs/14` 禁止把 OTP 明文写进日志，而本地又必须拿到验证码。
 折中是「仅非生产 + 直写 stderr（不经过 pino）」，因此**验证码不会进入结构化日志流**。
@@ -234,20 +234,20 @@ import appErrorFilter 相关：见 common/http（**不要重复注册**）
 
 ## Tests
 
-| 文件 | 项数 | 覆盖 |
-| --- | --- | --- |
-| `auth-email-otp.spec.ts` | 19 | 契约形状、只存 hash、防枚举、旧码作废、限流 429、错误/过期/重放/未请求、并发双消费、邮箱归一化、requestId 回显 |
-| `auth-session.spec.ts` | 16 | 无凭据 401、Bearer 形态、篡改/别密钥/alg=none/过期/结构非法、refresh 轮换与重放撤销、30 天过期、登出即时失效、禁用用户 |
-| `auth-github.spec.ts` | 16 | 302 + state Cookie、state 不匹配/缺失/篡改/过期/重复 Cookie、取消授权、换取失败 502、未配置 503、账号复用与绑定 |
-| `auth-guards.spec.ts` | 18 | 守卫真 HTTP 行为（403/401 区分、升权/撤权即时生效）、无 HTTP 的单元分支、token 提取顺序 |
-| `github-client.spec.ts` | 15 | **真实客户端**（stub fetch）：授权 URL、HTTP 200 + body.error、非 2xx、网络异常、**未验证邮箱不得采用**、超长邮箱丢弃 |
-| `auth-mail.spec.ts` | 10 | 通道选择（生产无 SMTP → 503）、SMTP 发信内容、控制台实现的生产双保险、装配真跑 |
-| `common-http.spec.ts` | 25 | Cookie 序列化/解析边界、requestId 形状与幂等、异常→错误封套映射、真 HTTP 过滤器不外泄 |
-| `auth-contract.spec.ts` | 21 | 路由**精确等于**契约、订阅/提权端点不存在、源码围栏（无 subscription / 无角色写入 / 无原生 SQL）、错误码在册、日志无查询串、/me 字段白名单、413 |
-| `di-wiring.spec.ts` | 7 | 构造参数必须显式 `@Inject`（防 `emitDecoratorMetadata` 退化）+ 真解析依赖 |
-| `auth-review-regressions.spec.ts` | 19 | §23 审查发现的逐条回归守卫（见补遗） |
-| `auth.integration.spec.ts` | 11 | **真 MySQL + 真 Redis**：OTP 全流程、hash 形态、重放、轮换、登出、限流真计数与 TTL、fail-closed、env→config |
-| `auth-db-semantics.integration.spec.ts` | 10 | **真 MySQL 仓储语义**：条件更新的二次失败与时间戳不被覆盖、并发消费恰好一次、并发 request-code 无 P2034、列宽收敛、utf8mb4 往返、默认偏好、findOrCreate 不覆盖 |
+| 文件                                    | 项数 | 覆盖                                                                                                                                                           |
+| --------------------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth-email-otp.spec.ts`                | 19   | 契约形状、只存 hash、防枚举、旧码作废、限流 429、错误/过期/重放/未请求、并发双消费、邮箱归一化、requestId 回显                                                 |
+| `auth-session.spec.ts`                  | 16   | 无凭据 401、Bearer 形态、篡改/别密钥/alg=none/过期/结构非法、refresh 轮换与重放撤销、30 天过期、登出即时失效、禁用用户                                         |
+| `auth-github.spec.ts`                   | 16   | 302 + state Cookie、state 不匹配/缺失/篡改/过期/重复 Cookie、取消授权、换取失败 502、未配置 503、账号复用与绑定                                                |
+| `auth-guards.spec.ts`                   | 18   | 守卫真 HTTP 行为（403/401 区分、升权/撤权即时生效）、无 HTTP 的单元分支、token 提取顺序                                                                        |
+| `github-client.spec.ts`                 | 15   | **真实客户端**（stub fetch）：授权 URL、HTTP 200 + body.error、非 2xx、网络异常、**未验证邮箱不得采用**、超长邮箱丢弃                                          |
+| `auth-mail.spec.ts`                     | 10   | 通道选择（生产无 SMTP → 503）、SMTP 发信内容、控制台实现的生产双保险、装配真跑                                                                                 |
+| `common-http.spec.ts`                   | 25   | Cookie 序列化/解析边界、requestId 形状与幂等、异常→错误封套映射、真 HTTP 过滤器不外泄                                                                          |
+| `auth-contract.spec.ts`                 | 21   | 路由**精确等于**契约、订阅/提权端点不存在、源码围栏（无 subscription / 无角色写入 / 无原生 SQL）、错误码在册、日志无查询串、/me 字段白名单、413                |
+| `di-wiring.spec.ts`                     | 7    | 构造参数必须显式 `@Inject`（防 `emitDecoratorMetadata` 退化）+ 真解析依赖                                                                                      |
+| `auth-review-regressions.spec.ts`       | 19   | §23 审查发现的逐条回归守卫（见补遗）                                                                                                                           |
+| `auth.integration.spec.ts`              | 11   | **真 MySQL + 真 Redis**：OTP 全流程、hash 形态、重放、轮换、登出、限流真计数与 TTL、fail-closed、env→config                                                    |
+| `auth-db-semantics.integration.spec.ts` | 10   | **真 MySQL 仓储语义**：条件更新的二次失败与时间戳不被覆盖、并发消费恰好一次、并发 request-code 无 P2034、列宽收敛、utf8mb4 往返、默认偏好、findOrCreate 不覆盖 |
 
 ## Test Results
 
@@ -401,43 +401,44 @@ python work/_agent02/counterproof-agent02.py                   # 反证（会自
 >
 > 审查由**两个没有本次开发上下文**的独立执行者完成（安全向 / 工程向），
 > 报告与全部原始输出：
+>
 > - `work/_agent02/review-A-security.md`
 > - `work/_agent02/review-B-engineering.md`
 
 ## 1. 原先过于乐观的声称（逐条更正）
 
-| 正文/代码里的声称 | 事实 |
-| --- | --- |
-| 「`/user/emails` 拿不到就不绑定，**不允许用未验证邮箱**」 | **假**。代码无条件回落到 `GET /user` 的公开邮箱（GitHub 不保证其已验证），而调用方会按邮箱并入已有账号 → 可接管他人账号。**P1** |
-| 「登出即便 Cookie 里有有效 access token 也一并按 sessionId 撤销」 | **假**。控制器永远传 `sessionId: undefined`，那条分支是**死码**；只带 `Authorization` 头的客户端登出后会话仍在。**P2** |
-| 「refresh 限流按用户」 | **名不副实**。主体是 refresh token 的摘要，而 token 每次都轮换 → 计数器每次都是新的，限额**永不触发**。 |
-| 「`X-Forwarded-For` 取第一跳」（当时作为已记录的设计取舍） | 取第一段时客户端可**完全伪造**，per-IP 限流实测 30/30 放行。已改为取最后一段。**P2** |
-| 「会话过期」 | 只由 refresh 路径判定；已过期但未撤销的会话在 `/me` 上**仍能用**（最长 15 分钟）。 |
-| 「外部字段超长」 | GitHub 昵称 > 120 字符 → Prisma P2000 → **该用户永久无法用 GitHub 登录**。**P2** |
-| 「错误日志只记 method/url/status」 | url 含**查询串** → `/auth/github/callback?code=...` 的 **OAuth code 进了日志**。**P3** |
-| 「并发安全」 | `request-code` 并发时 InnoDB 写冲突 P2034 未捕获，稳定复现 `200 + 500`。**P2** |
-| 「测试全绿 = 验过了」 | 反证发现 **5 处关键安全行为**（算法锁定、iss/aud、OTP 哈希绑邮箱、refresh 原子轮换、access Cookie 清除 Path）改坏后测试**依然全绿**；真实仓储的条件更新删掉后也全绿（测试只打内存替身）。**P3** |
+| 正文/代码里的声称                                                 | 事实                                                                                                                                                                                            |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 「`/user/emails` 拿不到就不绑定，**不允许用未验证邮箱**」         | **假**。代码无条件回落到 `GET /user` 的公开邮箱（GitHub 不保证其已验证），而调用方会按邮箱并入已有账号 → 可接管他人账号。**P1**                                                                 |
+| 「登出即便 Cookie 里有有效 access token 也一并按 sessionId 撤销」 | **假**。控制器永远传 `sessionId: undefined`，那条分支是**死码**；只带 `Authorization` 头的客户端登出后会话仍在。**P2**                                                                          |
+| 「refresh 限流按用户」                                            | **名不副实**。主体是 refresh token 的摘要，而 token 每次都轮换 → 计数器每次都是新的，限额**永不触发**。                                                                                         |
+| 「`X-Forwarded-For` 取第一跳」（当时作为已记录的设计取舍）        | 取第一段时客户端可**完全伪造**，per-IP 限流实测 30/30 放行。已改为取最后一段。**P2**                                                                                                            |
+| 「会话过期」                                                      | 只由 refresh 路径判定；已过期但未撤销的会话在 `/me` 上**仍能用**（最长 15 分钟）。                                                                                                              |
+| 「外部字段超长」                                                  | GitHub 昵称 > 120 字符 → Prisma P2000 → **该用户永久无法用 GitHub 登录**。**P2**                                                                                                                |
+| 「错误日志只记 method/url/status」                                | url 含**查询串** → `/auth/github/callback?code=...` 的 **OAuth code 进了日志**。**P3**                                                                                                          |
+| 「并发安全」                                                      | `request-code` 并发时 InnoDB 写冲突 P2034 未捕获，稳定复现 `200 + 500`。**P2**                                                                                                                  |
+| 「测试全绿 = 验过了」                                             | 反证发现 **5 处关键安全行为**（算法锁定、iss/aud、OTP 哈希绑邮箱、refresh 原子轮换、access Cookie 清除 Path）改坏后测试**依然全绿**；真实仓储的条件更新删掉后也全绿（测试只打内存替身）。**P3** |
 
 **新发现（本轮自查）**：首次 GitHub 登录只要带了邮箱，就会走
 `findOrCreateByEmail(email)` 建号，**昵称与头像被丢掉**。
 
 ## 2. 修复内容与影响范围
 
-| # | 修复 |
-| --- | --- |
-| P1 | `github.client.ts` 删掉对公开邮箱的回落：只认 `/user/emails` 里 `verified === true`；超长邮箱**丢弃**（不截断，截断会指向另一个人） |
-| P2 | `replaceActiveOtp` 捕获 P2034 做**有限重试**（3 次 + 退避），数据不变量不变 |
-| P2 | 登出改为「refresh token + access token 两条路径都试」；access token 过期不影响登出 |
-| P2 | 仓储边界按列宽截断 `displayName`/`avatarUrl`（`email` 不截断） |
-| P2 | `clientIp()` 改取 XFF **最后一段**（两种 nginx 写法下都不可伪造，无需 nginx 特殊配合） |
-| P2 | `findAuthenticatedSession` 加 `expiresAt > now`；内存替身同步 |
-| P3 | `refresh` 限流主体改为 **userId**（认不出身份时按 token 摘要兜底） |
-| P3 | `AppErrorFilter` 日志 URL **去掉查询串**（`pathForLog`） |
-| P3 | `AppErrorFilter` 识别 `err.status` 4xx（body-parser），413 不再变 500 |
-| P3 | OTP `requestIpHash` 改用 `EMAIL_OTP_PEPPER`（不再与 refresh 共用密钥材料） |
-| 新 | `findOrCreateByEmail(email, defaults)`：**仅新建时**采用昵称/头像，已有用户不覆盖 |
-| P3 | 路由面守卫改为**精确等于**契约（枚举 express 路由表）；源码围栏补「原生 SQL / ADMIN 字面量」并写入残余缺口 |
-| P3 | `apps/api/test` **首次纳入类型检查**，并修掉此前看不见的 3 个类型错误 |
+| #   | 修复                                                                                                                                |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `github.client.ts` 删掉对公开邮箱的回落：只认 `/user/emails` 里 `verified === true`；超长邮箱**丢弃**（不截断，截断会指向另一个人） |
+| P2  | `replaceActiveOtp` 捕获 P2034 做**有限重试**（3 次 + 退避），数据不变量不变                                                         |
+| P2  | 登出改为「refresh token + access token 两条路径都试」；access token 过期不影响登出                                                  |
+| P2  | 仓储边界按列宽截断 `displayName`/`avatarUrl`（`email` 不截断）                                                                      |
+| P2  | `clientIp()` 改取 XFF **最后一段**（两种 nginx 写法下都不可伪造，无需 nginx 特殊配合）                                              |
+| P2  | `findAuthenticatedSession` 加 `expiresAt > now`；内存替身同步                                                                       |
+| P3  | `refresh` 限流主体改为 **userId**（认不出身份时按 token 摘要兜底）                                                                  |
+| P3  | `AppErrorFilter` 日志 URL **去掉查询串**（`pathForLog`）                                                                            |
+| P3  | `AppErrorFilter` 识别 `err.status` 4xx（body-parser），413 不再变 500                                                               |
+| P3  | OTP `requestIpHash` 改用 `EMAIL_OTP_PEPPER`（不再与 refresh 共用密钥材料）                                                          |
+| 新  | `findOrCreateByEmail(email, defaults)`：**仅新建时**采用昵称/头像，已有用户不覆盖                                                   |
+| P3  | 路由面守卫改为**精确等于**契约（枚举 express 路由表）；源码围栏补「原生 SQL / ADMIN 字面量」并写入残余缺口                          |
+| P3  | `apps/api/test` **首次纳入类型检查**，并修掉此前看不见的 3 个类型错误                                                               |
 
 ## 3. ⚠ 下游必须注意的破坏性变更
 
