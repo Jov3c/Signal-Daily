@@ -3,8 +3,11 @@
 **Agent:** 02 — Auth / Users
 **Wave:** 1（上游：Agent 00、Agent 01）
 **日期:** 2026-09-23
-**分支:** `agent/02-auth`　**提交:** `cc3e4be` `7537180` `b1d4548`
+**提交:** `cc3e4be` `7537180` `b1d4548` `bfc6bad`
+**状态:** ✅ **已合并进 `main` 并推送到 GitHub**（`origin/main` = `bfc6bad`，分支 `agent/02-auth` 保留）
 **基线:** Development Contract v1.1 / Frontend Prototype v1.7 / Agent Rule v1.0
+
+> 下游直接 `git pull` `main` 即可，不必先合分支。
 
 > ⚠ **先读文末的「补遗（§23 独立审查）」再看正文结论。**
 > 正文记录了交付时的实现与验证；补遗记录了独立审查在「全绿」状态下查出的
