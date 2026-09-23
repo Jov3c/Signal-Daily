@@ -6,7 +6,7 @@
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p test/tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "tsc -b && node dist/main.js",
     "test:integration": "vitest run --config vitest.integration.config.mts"

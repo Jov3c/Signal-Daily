@@ -30,7 +30,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { envelope, validationError, type ApiEnvelope } from '@signal/contracts';
-import { AuthGuard, unauthorizedError } from '../../common/guards/auth.guard';
+import { AuthGuard, extractAccessToken, unauthorizedError } from '../../common/guards/auth.guard';
 import { CurrentUser } from '../../common/guards/current-user.decorator';
 import { countCookie, readCookie } from '../../common/http/cookies';
 import type { AuthUser, HttpRequestLike, HttpResponseLike } from '../../common/http/http-types';
@@ -210,10 +210,13 @@ export class AuthController {
     @Res({ passthrough: true }) res: CookieResponse,
   ): Promise<ApiEnvelope<LogoutResponse>> {
     const refreshToken = readCookie(readHeader(req, 'cookie'), REFRESH_TOKEN_COOKIE);
+    // 只带 access token（例如原生的非浏览器客户端只用 Authorization 头）时，
+    // 也必须能登出 —— 否则「登出返回 200 但会话还在」，是静默失效。
+    const accessToken = extractAccessToken(req);
 
-    // 即使没有有效 access token 也允许登出，所以这里不用 AuthGuard；
-    // 会话由 refresh token 定位，拿不到就当已经登出（幂等）。
-    await this.auth.logout({ refreshToken, sessionId: undefined });
+    // 刻意不用 AuthGuard：access token 只有 15 分钟，过期后就登不出去了。
+    // 会话由 refresh token 或 access token 定位，都拿不到就当已经登出（幂等）。
+    await this.auth.logout({ refreshToken, accessToken });
 
     res.setHeader('set-cookie', buildClearedSessionCookies(this.config));
     return envelope({ loggedOut: true });
@@ -235,19 +238,32 @@ export class AuthController {
 /**
  * 取客户端 IP。
  *
- * ⚠ 信任假设：优先采信 `x-forwarded-for` 的第一跳。这在
- * `docs/16` 的部署形态（nginx 反代到 api 内部端口）下成立，
- * 前提是 **nginx 必须覆盖写入 XFF**（`proxy_set_header X-Forwarded-For $remote_addr;`），
- * 不能原样透传客户端的值 —— 否则攻击者可以伪造 XFF 绕过 IP 维度限流。
- * 已记入 HANDOFF，请 Agent 11 / 14 在 nginx 配置中确认。
+ * ⚠ 取 **XFF 的最后一段**，而不是第一段。
  *
- * 即便 XFF 被伪造，per-email 的限流仍然有效，爆破窗口依旧受限。
+ * 独立审查实测：取第一段时，客户端只要伪造 `X-Forwarded-For: 1.2.3.4`
+ * 就能让 per-IP 限流完全失效（30 次请求 30 次放行）。因为第一段是**客户端自己写的**。
+ *
+ * 最后一段的语义是「**最后一跳代理直接看到的对端地址**」：
+ *   - nginx 默认 `$proxy_add_x_forwarded_for`（追加）→ 末段 = nginx 看到的真实客户端 IP；
+ *     客户端就算在前面塞垃圾，也只影响前面的段。
+ *   - nginx 写成 `$remote_addr`（覆盖）→ 只有一段，末段即真实 IP。
+ * 两种配置下都不可由客户端伪造，因此无需依赖 nginx 的具体写法。
+ *
+ * 仍需 Agent 11/14 保证 API **不经 nginx 直接对公网暴露**；若直连，
+ * `req.socket.remoteAddress` 才是可信来源（此时 XFF 由客户端自填，不可信）。
+ * 已记入 HANDOFF 的阻塞要求。
+ *
+ * 即便 IP 维度被绕过，per-email 维度仍然有效，验证码爆破窗口依旧受限。
  */
 function clientIp(req: AuthRequest): string | undefined {
   const forwarded = readHeader(req, 'x-forwarded-for');
   if (forwarded !== undefined) {
-    const first = forwarded.split(',')[0]?.trim();
-    if (first !== undefined && first !== '') return first;
+    const hops = forwarded
+      .split(',')
+      .map((hop) => hop.trim())
+      .filter((hop) => hop !== '');
+    const last = hops.at(-1);
+    if (last !== undefined) return last;
   }
   return req.ip ?? req.socket?.remoteAddress;
 }

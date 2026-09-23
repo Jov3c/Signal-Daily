@@ -18,9 +18,10 @@ import { APP_LOGGER } from '../../common/logger/app-logger';
 import type { Logger } from '@signal/logger';
 import { toMeDto } from '../users/dto/me.dto';
 import { USER_REPOSITORY, type UserRecord, type UserRepository } from '../users/user.repository';
+import { AccessTokenService } from './access-token.service';
 import { buildSessionCookies } from './auth-cookies';
 import { AUTH_CONFIG, type AuthConfig } from './auth.config';
-import { OAUTH_STATE_TTL_SECONDS, RATE_LIMITS, REFRESH_TOKEN_PURPOSE } from './auth.constants';
+import { OAUTH_STATE_TTL_SECONDS, RATE_LIMITS } from './auth.constants';
 import { CLOCK, type Clock } from './clock';
 import { GITHUB_CLIENT, type GithubClient, type GithubProfile } from './github.client';
 import { MAIL_SENDER, type MailSender } from './mail-sender';
@@ -62,6 +63,7 @@ export class AuthService {
     @Inject(MAIL_SENDER) private readonly mail: MailSender,
     @Inject(GITHUB_CLIENT) private readonly github: GithubClient,
     @Inject(APP_LOGGER) private readonly logger: Logger,
+    @Inject(AccessTokenService) private readonly accessTokens: AccessTokenService,
     @Inject(OtpService) private readonly otp: OtpService,
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(RateLimitService) private readonly rateLimit: RateLimitService,
@@ -83,7 +85,8 @@ export class AuthService {
       await this.rateLimit.enforce('otp:request:ip', context.ip, RATE_LIMITS.otpRequestPerIp);
     }
 
-    const ipHash = hashFingerprint(this.config.refreshTokenPepper, 'ip', context.ip);
+    // 用 OTP 自己的 pepper（而不是 refresh token 的）：不同用途不共用密钥材料。
+    const ipHash = hashFingerprint(this.config.emailOtpPepper, 'ip', context.ip);
     const { code, expiresInSeconds } = await this.otp.issue(email, ipHash);
 
     // 明文只进邮件正文，不落库、不进日志。
@@ -194,12 +197,18 @@ export class AuthService {
     const bound = await this.accounts.findAuthAccount(GITHUB_PROVIDER, profile.providerAccountId);
     if (bound !== null) return this.requireUser(bound);
 
+    // 首次登录要把昵称 / 头像一起带上：`findOrCreateByEmail` 只在**新建**时采用它们，
+    // 已有用户不会被覆盖（用户可能已经改过自己的资料）。
+    const displayName = profile.name ?? profile.login;
     const user =
       profile.email !== null
-        ? await this.users.findOrCreateByEmail(profile.email)
+        ? await this.users.findOrCreateByEmail(profile.email, {
+            displayName,
+            avatarUrl: profile.avatarUrl,
+          })
         : await this.users.createWithPreference({
             email: null,
-            displayName: profile.name ?? profile.login,
+            displayName,
             avatarUrl: profile.avatarUrl,
           });
 
@@ -228,6 +237,7 @@ export class AuthService {
   /* ---------------------------------------------------------------- */
 
   /** 刷新：轮换会话。 */
+
   async refresh(
     refreshToken: string | undefined,
     context: AuthRequestContext,
@@ -240,12 +250,25 @@ export class AuthService {
       });
     }
 
-    // 用 refresh token 的派生摘要作为限流主体：原始 token 不交给限流组件。
-    await this.rateLimit.enforce(
-      'auth:refresh',
-      deriveRateLimitSubject(refreshToken),
-      RATE_LIMITS.refreshPerUser,
-    );
+    // ⚠ 限流主体必须是 **userId**，不能是 refresh token 的摘要：
+    // refresh 每次都会轮换 token，用 token 作 key 等于每个请求一个新计数器，
+    // 限额永远不会触发 —— 看着有配置，实际完全失效。
+    //
+    // ⚠ 这里是**纯粹的限流前置检查，不参与鉴权**：识别不出身份时也不能提前
+    // 抛错，否则「重放已轮换的 token」这条路径会被截断成 SESSION_INVALID，
+    // 既丢了「凭据泄露」的语义，也**不会再撤销该用户全部会话**。
+    // 正确性一律交给下面的 rotate()。
+    const userId = await this.sessions.findUserIdByRefreshToken(refreshToken);
+    if (userId !== null) {
+      await this.rateLimit.enforce('auth:refresh:user', userId, RATE_LIMITS.refreshPerUser);
+    } else {
+      // 认不出来的 token 不存在「轮换」，用它自己的摘要兜底限流，挡住随机试探。
+      await this.rateLimit.enforce(
+        'auth:refresh:unknown',
+        createHash('sha256').update(refreshToken).digest('hex').slice(0, 32),
+        RATE_LIMITS.refreshPerUnknownToken,
+      );
+    }
 
     const session = await this.sessions.rotate(refreshToken, toSessionMeta(context));
 
@@ -264,18 +287,35 @@ export class AuthService {
   /**
    * 退出登录。幂等。
    *
-   * 优先用 refresh token 定位会话；即便 Cookie 里还有有效的 access token，
-   * 也一并按 `sessionId` 撤销（两条路径都指向同一个 Session，重复撤销无害）。
+   * 两条定位路径都要走：
+   *   1. refresh token（浏览器场景）—— 直接按哈希找到会话；
+   *   2. access token（只用 `Authorization` 头的客户端，例如原生 App）——
+   *      从载荷里取 `sid`。access token 已过期就忽略，不能因此让登出失败。
+   *
+   * 只做其中一条会让另一种客户端出现「登出返回 200 但会话还在」的静默失效。
    */
   async logout(params: {
     refreshToken: string | undefined;
-    sessionId: string | undefined;
+    accessToken?: string | undefined;
   }): Promise<void> {
     if (params.refreshToken !== undefined && params.refreshToken !== '') {
       await this.sessions.revokeByRefreshToken(params.refreshToken);
     }
-    if (params.sessionId !== undefined && params.sessionId !== '') {
-      await this.sessions.revoke(params.sessionId);
+
+    const sessionId = this.sessionIdFromAccessToken(params.accessToken);
+    if (sessionId !== undefined) {
+      await this.sessions.revoke(sessionId);
+    }
+  }
+
+  /** 尽力从 access token 取 `sid`；任何失败（过期 / 被篡改）都返回 undefined。 */
+  private sessionIdFromAccessToken(accessToken: string | undefined): string | undefined {
+    if (accessToken === undefined || accessToken === '') return undefined;
+    try {
+      return this.accessTokens.verifyAccessToken(accessToken).sessionId;
+    } catch {
+      // 故意吞掉：登出不该因为 access token 过期而失败。
+      return undefined;
     }
   }
 
@@ -308,14 +348,6 @@ function accountLookupBroken(): AppError {
 
 function toSessionMeta(context: AuthRequestContext): SessionRequestMeta {
   return { userAgent: context.userAgent, ip: context.ip };
-}
-
-/** 限流主体：从 refresh token 派生的定长摘要，不可反推、可稳定比较。 */
-function deriveRateLimitSubject(refreshToken: string): string {
-  return createHash('sha256')
-    .update(`${REFRESH_TOKEN_PURPOSE}:subject:${refreshToken}`)
-    .digest('hex')
-    .slice(0, 32);
 }
 
 /** 日志用的邮箱摘要：可关联、不可还原（邮箱是 PII，不进明文日志）。 */

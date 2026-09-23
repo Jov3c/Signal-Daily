@@ -67,4 +67,9 @@ export const RATE_LIMITS = {
   otpRequestPerIp: { limit: 10, windowSeconds: 3600 },
   otpVerifyPerEmail: { limit: 5, windowSeconds: 600 },
   refreshPerUser: { limit: 60, windowSeconds: 3600 },
+  /**
+   * 认不出身份的 refresh token（随机构造 / 已轮换掉的旧 token）按 token 摘要限流。
+   * 这类 token 不存在轮换，所以以摘要为 key 是稳定有效的。
+   */
+  refreshPerUnknownToken: { limit: 10, windowSeconds: 3600 },
 } as const;

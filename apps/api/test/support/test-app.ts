@@ -175,6 +175,35 @@ export async function createAuthTestApp(
   };
 }
 
+/**
+ * 枚举应用**实际挂载的所有路由**（`METHOD /full/path`）。
+ *
+ * 用它做「路由面精确等于契约」的守卫：只断言「文档里的路由存在」是不够的 ——
+ * 多挂一个未登记的端点（例如 `GET /auth/whoami-extra`）时，
+ * 那种写法依然是全绿的（独立审查实测）。
+ *
+ * 读的是 express 的路由表（Nest 11 / Express 5 上是 `instance.router`）。
+ * 万一将来的版本挪了位置，这个函数会**抛错而不是静默返回空数组** ——
+ * 否则守卫会退化成永远通过。
+ */
+export function registeredRoutes(app: INestApplication): string[] {
+  const instance = app.getHttpAdapter().getInstance() as unknown as Record<string, unknown>;
+  const router = (instance.router ?? instance._router) as { stack?: unknown[] } | undefined;
+  if (router?.stack === undefined) {
+    throw new Error('无法读取 express 路由表：守卫会退化成空跑，必须修好它而不是忽略');
+  }
+
+  const routes: string[] = [];
+  for (const layer of router.stack as Record<string, unknown>[]) {
+    const route = layer.route as { path?: string; methods?: Record<string, boolean> } | undefined;
+    if (route?.path === undefined) continue;
+    for (const method of Object.keys(route.methods ?? {})) {
+      routes.push(`${method.toUpperCase()} ${route.path}`);
+    }
+  }
+  return routes.sort();
+}
+
 /** 取响应的 `set-cookie` 列表。 */
 export function setCookies(response: Response): string[] {
   const raw = response.headers.getSetCookie?.() ?? [];

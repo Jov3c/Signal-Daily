@@ -91,7 +91,9 @@ export class ConsoleMailSender implements MailSender {
 
 @Injectable()
 export class UnavailableMailSender implements MailSender {
-  async sendOtpEmail(): Promise<void> {
+  // 签名必须与端口一致（参数故意忽略）：否则这个实现不满足 `MailSender`，
+  // 而 test/ 目录此前不参与 `tsc`，这类错误在运行时之前无人可见。
+  async sendOtpEmail(_params: SendOtpEmailParams): Promise<void> {
     throw mailNotConfigured();
   }
 }

@@ -54,16 +54,28 @@ const STATUS_TO_PLATFORM_CODE: Readonly<Record<number, ErrorCodeValue>> = {
   403: PlatformErrorCode.FORBIDDEN,
   404: PlatformErrorCode.NOT_FOUND,
   409: PlatformErrorCode.CONFLICT,
+  413: PlatformErrorCode.VALIDATION_FAILED,
+  415: PlatformErrorCode.VALIDATION_FAILED,
   429: PlatformErrorCode.RATE_LIMITED,
 };
 
-/** 状态码 → 对外的安全文案（不回显框架原始 message）。 */
+/**
+ * 状态码 → 对外的安全文案（不回显框架原始 message）。
+ *
+ * ⚠ 413 / 415 目前复用 `VALIDATION_FAILED`：`docs/05` 没有为它们定义平台码，
+ * 而 Agent 02 无权往 `PlatformErrorCode` 里加值（那是 Agent 00 的注册表）。
+ * 已提交 `handoffs/CONTRACT_CHANGE_REQUEST-agent-02.md` 请求补
+ * `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE`；在那之前
+ * **状态码本身是对的**（不再把「请求体过大」报成 500）。
+ */
 const STATUS_MESSAGE: Readonly<Record<number, string>> = {
   400: 'Request validation failed',
   401: 'Unauthorized',
   403: 'Forbidden',
   404: 'Resource not found',
   409: 'Conflict',
+  413: 'Request body too large',
+  415: 'Unsupported media type',
   429: 'Too many requests',
 };
 
@@ -91,12 +103,38 @@ export function mapExceptionToApiError(exception: unknown): MappedError {
     };
   }
 
+  // body-parser / http-errors 抛出的**客户端错误**：它们带数值 status，
+  // 但不是 Nest 的 HttpException（例如 PayloadTooLargeError）。
+  // 不识别就会被降级成 500 —— 既误导客户端，又会污染 5xx 告警。
+  const clientStatus = numericClientStatus(exception);
+  if (clientStatus !== null) {
+    return {
+      httpStatus: clientStatus,
+      code: STATUS_TO_PLATFORM_CODE[clientStatus] ?? PlatformErrorCode.VALIDATION_FAILED,
+      message: STATUS_MESSAGE[clientStatus] ?? 'Request rejected',
+      details: null,
+    };
+  }
+
   return {
     httpStatus: 500,
     code: PlatformErrorCode.INTERNAL_ERROR,
     message: 'Internal server error',
     details: null,
   };
+}
+
+/**
+ * 读取 `err.status` / `err.statusCode`，只接受 4xx。
+ * 5xx 一律走 INTERNAL_ERROR，绝不把上游/框架的内部错误直接透出。
+ */
+function numericClientStatus(exception: unknown): number | null {
+  if (typeof exception !== 'object' || exception === null) return null;
+  const candidate =
+    (exception as { status?: unknown }).status ??
+    (exception as { statusCode?: unknown }).statusCode;
+  if (typeof candidate !== 'number' || !Number.isInteger(candidate)) return null;
+  return candidate >= 400 && candidate <= 499 ? candidate : null;
 }
 
 /**
@@ -112,6 +150,13 @@ function validationFieldDetails(exception: HttpException): unknown | null {
   const fields = message.filter((item): item is string => typeof item === 'string');
   if (fields.length !== message.length || fields.length === 0) return null;
   return { fields };
+}
+
+/** 只保留路径，丢掉查询串与 hash。 */
+export function pathForLog(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined;
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url : url.slice(0, cut);
 }
 
 @Catch()
@@ -133,7 +178,10 @@ export class AppErrorFilter implements ExceptionFilter {
     const logFields = {
       requestId,
       method: req.method,
-      url: req.url,
+      // ⚠ 必须是**去掉查询串**的路径：`docs/14` 要求不记录 OAuth code，
+      // 而 `/auth/github/callback?code=...&state=...` 的 code 就在 query 里。
+      // 记完整 URL 等于把一次性凭据写进日志。
+      url: pathForLog(req.url),
       status: mapped.httpStatus,
       errorCode: mapped.code,
     };

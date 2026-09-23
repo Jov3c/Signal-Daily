@@ -24,7 +24,7 @@ import {
   setCookies,
   type AuthTestApp,
 } from './support/test-app';
-import { createAuthTestApp } from './support/test-app';
+import { createAuthTestApp, registeredRoutes } from './support/test-app';
 import { ROLE_ADMIN_WRITE_PATTERNS, readSourceFiles } from './support/source-scan';
 
 const API_SRC = fileURLToPath(new URL('../src', import.meta.url));
@@ -78,6 +78,17 @@ describe('路由面（真实 HTTP）', () => {
       // 404 才会说明路由不存在；其余状态（400/401/302/503）都说明路由已挂载。
       expect(response.status, `${method} ${path}`).not.toBe(404);
     }
+  });
+
+  it('★ 路由表**精确等于**契约：多挂一条未登记的端点也要红', async () => {
+    const test = await boot();
+
+    const actual = registeredRoutes(test.app);
+    const expected = DOCUMENTED_ROUTES.map(([method, path]) => `${method} ${path}`).sort();
+
+    // 这条断言与「逐条探测 404」的区别：后者在**多**出端点时依然全绿。
+    // （独立审查实测：注入一条 `GET /api/v1/auth/whoami-extra` 后旧写法不红。）
+    expect(actual).toEqual(expected);
   });
 
   it('V1 已取消的订阅端点不存在', async () => {
@@ -160,6 +171,34 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
       .map((file) => file.relativePath);
 
     expect(offenders).toEqual([]);
+  });
+
+  it('业务模块里不出现绕过 ORM 的原生写库，也不出现 ADMIN 字面量', () => {
+    // ⚠ 覆盖范围的**已知残余缺口**（独立审查指出，这里如实记录而不是假装覆盖）：
+    //   动态值（`role: someVar`）、计算键名（`[k]: 'ADMIN'`）、以及通过
+    //   原生 SQL 改角色，静态扫描都抓不到。
+    //   真正的兜底是「路由面精确等于契约」那条断言（多一个提权端点就红）
+    //   以及 AdminGuard 以数据库角色为准。这里只拦住最容易发生的几种写法。
+    const RAW_SQL = /\$(?:executeRaw|queryRaw|executeRawUnsafe|queryRawUnsafe)/;
+    const ADMIN_LITERAL = /['"`]ADMIN['"`]/;
+
+    const offenders = sourceFiles()
+      .filter((file) => file.relativePath.startsWith('modules/'))
+      .filter((file) => RAW_SQL.test(file.code) || ADMIN_LITERAL.test(file.code))
+      .map((file) => file.relativePath);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('越界守卫本身有牙齿：注入一个提权写法必须被抓到', () => {
+    // 反证：把「记忆里的写库写法」喂给同一组规则，确认它们真的会命中。
+    const WRITE = 'await tx.user.update({ where: { id }, data: { role: UserRole.ADMIN } });';
+    const RAW = "await this.prisma.$executeRaw`UPDATE users SET role = 'ADMIN'`;";
+    const LITERAL = "data: { role: 'ADMIN' }";
+
+    expect(ROLE_ADMIN_WRITE_PATTERNS.some((p) => p.test(WRITE))).toBe(true);
+    expect(/\$(?:executeRaw|queryRaw|executeRawUnsafe|queryRawUnsafe)/.test(RAW)).toBe(true);
+    expect(/['"`]ADMIN['"`]/.test(LITERAL)).toBe(true);
   });
 
   it('业务模块里不声明 admin 路由前缀', () => {
@@ -266,6 +305,25 @@ describe('日志不泄漏凭据（docs/14）', () => {
     );
     // 邮箱本身也不应明文进日志（PII）
     expect(logs).not.toContain('"reader@example.com"');
+  });
+});
+
+describe('日志里的 URL 必须去掉查询串（docs/14：不记录 OAuth code）', () => {
+  it('回调失败时日志中不出现 code / state', async () => {
+    const test = await boot();
+
+    // 带一个明显的哨兵值，便于断言它没有落进日志
+    const response = await test.request(
+      '/api/v1/auth/github/callback?code=SECRET_OAUTH_CODE&state=SECRET_STATE_VALUE',
+    );
+    expect(response.status).toBeGreaterThanOrEqual(400);
+
+    const logs = test.logStream.lines.join('');
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs).not.toContain('SECRET_OAUTH_CODE');
+    expect(logs).not.toContain('SECRET_STATE_VALUE');
+    // 路径本身仍然要留下，否则排查问题时什么都看不到
+    expect(logs).toContain('/api/v1/auth/github/callback');
   });
 });
 

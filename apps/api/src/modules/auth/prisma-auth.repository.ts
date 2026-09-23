@@ -25,26 +25,66 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
+/**
+ * 写冲突 / 死锁（并发事务争用同一批行，MySQL InnoDB 会主动回滚一方）。
+ * 这是**可重试**的错误，不属于业务失败。
+ */
+function isWriteConflict(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+}
+
+/** 写冲突最多重试次数与退避基数。 */
+export const WRITE_CONFLICT_MAX_RETRIES = 3;
+export const WRITE_CONFLICT_BACKOFF_MS = 15;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 @Injectable()
 export class PrismaAuthRepository implements AuthRepository {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  /**
+   * 作废旧码 + 写新码。
+   *
+   * ⚠ 为什么必须在事务里：两次「先作废、再插入」交错执行时，
+   * 后来的插入有可能落在前一次「作废」之前，从而留下**两条未消费**的行；
+   * 一旦新的被消费掉，旧的那条就会重新变成「最新未消费」，**旧验证码复活**。
+   *
+   * ⚠ 为什么要重试：InnoDB 上并发写同一批行会抛 **P2034（写冲突 / 死锁）**。
+   * 实测并发 8 次请求时 7 次抛 P2034 → 冒泡成 500。用户在两个标签页点
+   * 「发送验证码」就会看到「服务器错误」，并污染 5xx 告警。
+   * 这里做**有限次重试**（每次重试都会重新读到最新行）。
+   */
   async replaceActiveOtp(input: CreateOtpInput, now: Date): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.emailOtpCode.updateMany({
-        where: { email: input.email, consumedAt: null },
-        // 用「置为已消费」而不是删除：保留短期审计痕迹，也让重放能被识别。
-        data: { consumedAt: now },
+    const run = () =>
+      this.prisma.$transaction(async (tx) => {
+        await tx.emailOtpCode.updateMany({
+          where: { email: input.email, consumedAt: null },
+          // 用「置为已消费」而不是删除：保留短期审计痕迹，也让重放能被识别。
+          data: { consumedAt: now },
+        });
+        await tx.emailOtpCode.create({
+          data: {
+            email: input.email,
+            codeHash: input.codeHash,
+            expiresAt: input.expiresAt,
+            requestIpHash: input.requestIpHash,
+          },
+        });
       });
-      await tx.emailOtpCode.create({
-        data: {
-          email: input.email,
-          codeHash: input.codeHash,
-          expiresAt: input.expiresAt,
-          requestIpHash: input.requestIpHash,
-        },
-      });
-    });
+
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await run();
+        return;
+      } catch (error) {
+        if (attempt >= WRITE_CONFLICT_MAX_RETRIES || !isWriteConflict(error)) throw error;
+        // 退避一下再重试，避免两个请求同步地再次撞上。
+        await sleep(WRITE_CONFLICT_BACKOFF_MS * (attempt + 1));
+      }
+    }
   }
 
   async findLatestUnconsumedOtp(email: string): Promise<OtpRecord | null> {
@@ -118,8 +158,10 @@ export class PrismaAuthRepository implements AuthRepository {
     if (bigIntId === null) return null;
 
     // 一条查询同时拿会话有效性与用户当前角色 / 状态（join，不是两次往返）。
+    // 会话过期也在这里判掉：否则「已过期但未撤销」的会话还能撑到 access token 过期
+    // （最长 15 分钟）。这里用数据库可比较的时间值，与 `Session.expiresAt` 同源。
     const row = await this.prisma.session.findFirst({
-      where: { id: bigIntId, revokedAt: null },
+      where: { id: bigIntId, revokedAt: null, expiresAt: { gt: new Date() } },
       select: {
         id: true,
         user: { select: { id: true, role: true, status: true } },

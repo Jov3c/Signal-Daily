@@ -7,7 +7,13 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { toBigIntId, toIdString } from '../../common/prisma/bigint-id';
 import { toUserRole, toUserStatus } from '../../common/prisma/prisma-enums';
-import type { CreateUserInput, UserRecord, UserRepository } from './user.repository';
+import {
+  USER_FIELD_LIMITS,
+  clampToColumn,
+  type CreateUserInput,
+  type UserRecord,
+  type UserRepository,
+} from './user.repository';
 
 /** Prisma 行 → 领域记录。BIGINT 转 string，枚举收敛到契约枚举。 */
 function toUserRecord(row: {
@@ -66,12 +72,19 @@ export class PrismaUserRepository implements UserRepository {
     return row === null ? null : toUserRecord(row);
   }
 
-  async findOrCreateByEmail(email: string): Promise<UserRecord> {
+  async findOrCreateByEmail(
+    email: string,
+    defaults: { displayName?: string | null; avatarUrl?: string | null } = {},
+  ): Promise<UserRecord> {
     const existing = await this.findByEmail(email);
     if (existing !== null) return existing;
 
     try {
-      return await this.createWithPreference({ email, displayName: null, avatarUrl: null });
+      return await this.createWithPreference({
+        email,
+        displayName: defaults.displayName ?? null,
+        avatarUrl: defaults.avatarUrl ?? null,
+      });
     } catch (error) {
       // 并发创建：唯一约束挡住了后来者，重读即可。
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -83,15 +96,17 @@ export class PrismaUserRepository implements UserRepository {
   }
 
   async createWithPreference(input: CreateUserInput): Promise<UserRecord> {
+    // 外部来源（GitHub 资料）的字段可能超过列宽，先在边界截断，
+    // 否则 Prisma 会抛 P2000，让整个登录 500。
+    const data = {
+      email: input.email,
+      displayName: clampToColumn(input.displayName, USER_FIELD_LIMITS.displayName),
+      avatarUrl: clampToColumn(input.avatarUrl, USER_FIELD_LIMITS.avatarUrl),
+    };
+
     // 事务：users 与 user_preferences 必须同时存在，否则前端读偏好会缺行。
     const row = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: {
-          email: input.email,
-          displayName: input.displayName,
-          avatarUrl: input.avatarUrl,
-        },
-      });
+      const created = await tx.user.create({ data });
       await tx.userPreference.create({ data: { userId: created.id } });
       return created;
     });

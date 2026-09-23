@@ -31,10 +31,12 @@ import type {
   OtpRecord,
   SessionRecord,
 } from '../../src/modules/auth/repository';
-import type {
-  CreateUserInput,
-  UserRecord,
-  UserRepository,
+import {
+  USER_FIELD_LIMITS,
+  clampToColumn,
+  type CreateUserInput,
+  type UserRecord,
+  type UserRepository,
 } from '../../src/modules/users/user.repository';
 
 /* ------------------------------------------------------------------ */
@@ -220,9 +222,13 @@ export class InMemoryUserRepository implements UserRepository {
     return null;
   }
 
-  async findOrCreateByEmail(email: string): Promise<UserRecord> {
+  async findOrCreateByEmail(
+    email: string,
+    defaults: { displayName?: string | null; avatarUrl?: string | null } = {},
+  ): Promise<UserRecord> {
     const existing = await this.findByEmail(email);
-    return existing ?? this.seed({ email });
+    // 与真实实现一致：只在新建时采用 defaults，已有用户不覆盖。
+    return existing ?? this.seed({ email, ...defaults });
   }
 
   async createWithPreference(input: CreateUserInput): Promise<UserRecord> {
@@ -232,7 +238,12 @@ export class InMemoryUserRepository implements UserRepository {
       (error as { code?: string }).code = 'P2002';
       throw error;
     }
-    return this.seed(input);
+    // 复刻真实实现按列宽截断展示型字段（真库上的等价断言在集成测试里）。
+    return this.seed({
+      ...input,
+      displayName: clampToColumn(input.displayName, USER_FIELD_LIMITS.displayName),
+      avatarUrl: clampToColumn(input.avatarUrl, USER_FIELD_LIMITS.avatarUrl),
+    });
   }
 }
 
@@ -304,8 +315,9 @@ export class InMemoryAuthRepository implements AuthRepository {
 
   async findAuthenticatedSession(sessionId: string): Promise<AuthenticatedSession | null> {
     const row = this.sessions.find((s) => s.id === sessionId);
-    // 已撤销的会话与不存在的会话一样返回 null —— 与真实实现的 where 条件一致。
+    // 已撤销 / 已过期的会话与不存在的会话一样返回 null —— 与真实实现的 where 条件一致。
     if (row === undefined || row.revokedAt !== null) return null;
+    if (row.expiresAt.getTime() <= Date.now()) return null;
 
     const user = this.users === null ? null : await this.users.findAuthUserById(row.userId);
     if (user === null) return null;

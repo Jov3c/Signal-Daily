@@ -20,6 +20,12 @@ export const GITHUB_CLIENT = 'GITHUB_CLIENT';
 /** 外部调用的超时（毫秒）。不是 env：`docs/20` 没有对应变量，且与采集超时无关。 */
 export const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * 邮箱长度上限，与 `users.email` 的 `VarChar(254)` 一致。
+ * 超出的地址直接丢弃而不是截断 —— 截断后的地址可能属于另一个人。
+ */
+export const MAX_EMAIL_LENGTH = 254;
+
 /** 归一化后的 GitHub 用户资料。 */
 export type GithubProfile = {
   /** GitHub 用户 id（数字），字符串形式。 */
@@ -118,14 +124,14 @@ export class FetchGithubClient implements GithubClient {
       login?: unknown;
       name?: unknown;
       avatar_url?: unknown;
-      email?: unknown;
     };
 
     if (typeof user.id !== 'number' || typeof user.login !== 'string') {
       throw oauthExchangeFailed();
     }
 
-    const email = await this.resolveVerifiedEmail(headers, user.email);
+    // 刻意不读 `user.email`：那是公开邮箱，不保证已验证（见下）。
+    const email = await this.resolveVerifiedEmail(headers);
 
     return {
       providerAccountId: String(user.id),
@@ -137,16 +143,20 @@ export class FetchGithubClient implements GithubClient {
   }
 
   /**
-   * 取「已验证的主邮箱」。
+   * 取「**已验证**的主邮箱」。取不到就返回 null。
    *
-   * `GET /user` 的 `email` 字段在用户把邮箱设为私有时为 null，且**不保证已验证**，
-   * 所以一律以 `/user/emails` 的结果为准；拿不到就返回 null（调用方不允许用
-   * 未验证邮箱绑定账号）。
+   * ⚠ 这里**不允许**回落到 `GET /user` 的 `email` 字段。
+   * 那个字段是用户的「公开邮箱」，GitHub **不保证它已验证** ——
+   * 用户可以在设置里填任意地址（包括别人的）。而调用方
+   * （`AuthService.resolveGithubUser`）会用这个邮箱去 `findOrCreateByEmail`，
+   * 也就是**按邮箱并入已有账号**：一旦采信未验证邮箱，
+   * 攻击者只要把公开邮箱改成受害者的地址，就能直接登进受害者账号。
+   *
+   * 因此判定标准只有一条：`/user/emails` 里 `verified === true`。
+   * 邮箱端点失败、返回非数组、或没有任何已验证邮箱 → 一律 null
+   * （调用方会建一个 email 为 null 的新用户，不做任何账号合并）。
    */
-  private async resolveVerifiedEmail(
-    headers: Record<string, string>,
-    fallback: unknown,
-  ): Promise<string | null> {
+  private async resolveVerifiedEmail(headers: Record<string, string>): Promise<string | null> {
     try {
       const response = await this.request('https://api.github.com/user/emails', { headers });
       const emails = (await readJson(response)) as unknown;
@@ -159,14 +169,16 @@ export class FetchGithubClient implements GithubClient {
             (item as { verified?: unknown }).verified === true,
         );
         const primary = verified.find((item) => item.primary === true);
-        if (primary !== undefined) return primary.email;
-        if (verified[0] !== undefined) return verified[0].email;
+        const chosen = primary ?? verified[0];
+        // 超出 users.email 列宽（VarChar(254)）的一律丢弃，而不是截断 ——
+        // 截断后的地址指向另一个人，比没有邮箱危险得多。
+        if (chosen !== undefined && chosen.email.length <= MAX_EMAIL_LENGTH) return chosen.email;
       }
     } catch {
-      // 邮箱端点失败不应让整个登录失败 —— 只是拿不到邮箱而已。
+      // 邮箱端点失败不应让整个登录失败 —— 只是拿不到邮箱而已（于是不合并账号）。
     }
 
-    return typeof fallback === 'string' && fallback !== '' ? fallback : null;
+    return null;
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {

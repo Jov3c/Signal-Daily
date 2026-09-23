@@ -188,4 +188,61 @@ describe('fetchProfile', () => {
       code: DomainErrorCode.AUTH_OAUTH_EXCHANGE_FAILED,
     });
   });
+
+  /**
+   * ★ P1 回归守卫（独立审查发现）。
+   *
+   * `GET /user` 的 `email` 是用户的**公开邮箱**，GitHub 不保证已验证 ——
+   * 用户可以把它设成任意地址。而调用方会用这个邮箱去 `findOrCreateByEmail`，
+   * 也就是按邮箱并入已有账号：一旦采信未验证邮箱，
+   * 攻击者把公开邮箱改成受害者的地址就能直接登进受害者账号。
+   *
+   * ⚠ 修复前，本文件里那条「忽略未验证的邮箱」的 stub 里**根本没有 email 字段**，
+   * 所以回落分支零覆盖 —— 测试是绿的，漏洞还在。
+   */
+  it('★ 公开 email 未被验证时不得采用，也不得回落到它', async () => {
+    stubFetch([
+      {
+        body: {
+          id: 42,
+          login: 'attacker',
+          name: 'Attacker',
+          avatar_url: null,
+          // 攻击者把公开邮箱填成受害者地址
+          email: 'victim@example.com',
+        },
+      },
+      { body: [{ email: 'victim@example.com', primary: true, verified: false }] },
+    ]);
+
+    expect((await client().fetchProfile('t')).email).toBeNull();
+  });
+
+  it('邮箱端点不可用时回落到公开 email 同样不被允许', async () => {
+    stubFetch([
+      { body: { id: 42, login: 'x', name: null, avatar_url: null, email: 'victim@example.com' } },
+      { status: 500, body: {} },
+    ]);
+
+    expect((await client().fetchProfile('t')).email).toBeNull();
+  });
+
+  it('已验证邮箱超过 users.email 列宽时丢弃而不是截断（截断会指向另一个人）', async () => {
+    const tooLong = `${'a'.repeat(300)}@example.com`;
+    stubFetch([
+      { body: { id: 42, login: 'x', name: null, avatar_url: null } },
+      { body: [{ email: tooLong, primary: true, verified: true }] },
+    ]);
+
+    expect((await client().fetchProfile('t')).email).toBeNull();
+  });
+
+  it('已验证邮箱正常时仍会被采用（确认上面的收紧没有把功能关掉）', async () => {
+    stubFetch([
+      { body: { id: 42, login: 'x', name: null, avatar_url: null } },
+      { body: [{ email: 'real@example.com', primary: true, verified: true }] },
+    ]);
+
+    expect((await client().fetchProfile('t')).email).toBe('real@example.com');
+  });
 });

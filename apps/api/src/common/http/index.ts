@@ -12,6 +12,7 @@ export {
 export {
   AppErrorFilter,
   mapExceptionToApiError,
+  pathForLog,
   type MutableHttpResponse,
 } from './app-error.filter';
 export { REQUEST_ID_PATTERN, generateRequestId, resolveRequestId } from './request-id';

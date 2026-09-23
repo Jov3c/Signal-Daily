@@ -209,9 +209,11 @@ describe('真实 MySQL：Email OTP 全流程', () => {
     });
     expect(row).not.toBeNull();
     // 列宽是 VarChar(128)，sha256 hex 是 64 位
+    expect(row).not.toBeNull();
     expect(row?.codeHash).toMatch(/^[0-9a-f]{64}$/);
     expect(row?.codeHash).not.toContain(OTP_CODE);
-    expect(row?.requestIpHash === null || /^[0-9a-f]{64}$/.test(row.requestIpHash)).toBe(true);
+    const ipHash = row?.requestIpHash ?? null;
+    expect(ipHash === null || /^[0-9a-f]{64}$/.test(ipHash)).toBe(true);
   });
 
   it('校验成功 → 建用户 + 偏好 + 会话，验证码被消费', async () => {

@@ -11,8 +11,8 @@ import {
   SmtpMailSender,
   UnavailableMailSender,
   type MailTransportFactory,
-  type SmtpConfig,
 } from '../src/modules/auth/mail-sender';
+import type { SmtpConfig } from '../src/modules/auth/auth.config';
 import { selectMailSender } from '../src/modules/auth/auth.module';
 import { createTestAuthConfig } from './support/fakes';
 import { createAuthTestApp, type AuthTestApp } from './support/test-app';

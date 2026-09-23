@@ -158,6 +158,22 @@ export class SessionService {
   }
 
   /**
+   * 只反查 refresh token 属于谁，不做任何状态变更。
+   *
+   * 给限流用：限流 key 必须是 **userId**（token 每次都轮换，用 token 作 key
+   * 等于永远不触发限额）。找不到、或会话已撤销/已过期时返回 null，
+   * 调用方按 `AUTH_SESSION_INVALID` 处理。
+   */
+  async findUserIdByRefreshToken(refreshToken: string): Promise<string | null> {
+    const session = await this.repository.findSessionByRefreshHash(
+      this.hashRefreshToken(refreshToken),
+    );
+    if (session === null || session.revokedAt !== null) return null;
+    if (session.expiresAt.getTime() <= this.clock.now().getTime()) return null;
+    return session.userId;
+  }
+
+  /**
    * 算 refresh token 的存储哈希。
    *
    * 用 HMAC + pepper 而不是裸 SHA-256：refresh token 是高熵随机串，
