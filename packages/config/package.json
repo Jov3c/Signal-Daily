@@ -1,0 +1,25 @@
+{
+  "name": "@signal/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal 环境变量校验与业务时区工具。env 清单严格对齐 docs/20，不得新增未记录变量。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@signal/contracts": "workspace:*",
+    "zod": "^3.23.8"
+  }
+}

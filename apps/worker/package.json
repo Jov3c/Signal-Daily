@@ -1,0 +1,22 @@
+{
+  "name": "@signal/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal Worker（NestJS standalone）— Agent 00 只提供 bootstrap 空壳，Job 由 Agent 04–08 填充。",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "start": "node dist/main.js",
+    "start:dev": "tsc -b && node dist/main.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@signal/config": "workspace:*",
+    "@signal/contracts": "workspace:*",
+    "@signal/logger": "workspace:*",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  }
+}

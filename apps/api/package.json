@@ -1,0 +1,23 @@
+{
+  "name": "@signal/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal API（NestJS）— Agent 00 只提供 bootstrap 空壳，业务模块由 Agent 02–11 填充。",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "start": "node dist/main.js",
+    "start:dev": "tsc -b && node dist/main.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@signal/config": "workspace:*",
+    "@signal/contracts": "workspace:*",
+    "@signal/logger": "workspace:*",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  }
+}

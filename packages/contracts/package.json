@@ -1,0 +1,21 @@
+{
+  "name": "@signal/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal 公共契约：唯一共享 enum / DTO / Queue 名 / Error Code。任何 app 不得复制此处类型。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@signal/logger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal 统一 Pino JSON 日志与 secret 脱敏。字段形状见 docs/15。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@signal/contracts": "workspace:*",
+    "pino": "^9.5.0"
+  }
+}
