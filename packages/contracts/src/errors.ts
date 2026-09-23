@@ -62,6 +62,39 @@ export type PlatformErrorCodeValue = (typeof PlatformErrorCode)[keyof typeof Pla
 export const DomainErrorCode = {
   /** docs/02 示例；Agent 03 Source Registry 使用。 */
   SOURCE_NOT_FOUND: 'SOURCE_NOT_FOUND',
+
+  /* ---- Agent 02 — Auth / Users（docs/11 / docs/14 / tasks/agent-02-auth.md） ---- */
+
+  /** 验证码不正确。 */
+  AUTH_OTP_INVALID: 'AUTH_OTP_INVALID',
+  /** 验证码已过期（超过 10 分钟）。 */
+  AUTH_OTP_EXPIRED: 'AUTH_OTP_EXPIRED',
+  /** 验证码已被使用过 —— 重放。 */
+  AUTH_OTP_ALREADY_USED: 'AUTH_OTP_ALREADY_USED',
+  /** refresh token 未知 / 已过期。 */
+  AUTH_SESSION_INVALID: 'AUTH_SESSION_INVALID',
+  /**
+   * refresh token 对应的 Session 已被撤销。
+   * 出现在「提交一个已轮换掉的 refresh token」时 —— 视为凭据泄露，
+   * 实现会连带撤销该用户的全部 Session。
+   */
+  AUTH_SESSION_REVOKED: 'AUTH_SESSION_REVOKED',
+  /** OAuth state 缺失 / 签名不合法 / 已过期 / 与 Cookie 不匹配。 */
+  AUTH_OAUTH_STATE_INVALID: 'AUTH_OAUTH_STATE_INVALID',
+  /** 与 GitHub 换取 token / 拉取用户资料失败。 */
+  AUTH_OAUTH_EXCHANGE_FAILED: 'AUTH_OAUTH_EXCHANGE_FAILED',
+  /** 未配置 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET。 */
+  AUTH_GITHUB_NOT_CONFIGURED: 'AUTH_GITHUB_NOT_CONFIGURED',
+  /**
+   * 生产环境没有可用的邮件通道（SMTP_* 未配置），无法投递 OTP。
+   * 刻意不静默降级：宁可登录不可用，也不能把验证码打进日志。
+   */
+  AUTH_MAIL_NOT_CONFIGURED: 'AUTH_MAIL_NOT_CONFIGURED',
+  /** 用户已被管理员禁用。 */
+  AUTH_ACCOUNT_DISABLED: 'AUTH_ACCOUNT_DISABLED',
+
+  /** 用户不存在。 */
+  USER_NOT_FOUND: 'USER_NOT_FOUND',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];

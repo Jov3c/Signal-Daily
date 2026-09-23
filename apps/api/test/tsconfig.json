@@ -1,0 +1,15 @@
+{
+  "$comment": "仅供打包器（vitest / oxc）解析 apps/api/test 下的测试文件。测试文件不在 tsc -b 的项目里（见 agent-00-HANDOFF Known Limitations 第 3 条），所以这里单独打开装饰器开关；否则测试里写 @Controller / @UseGuards 会报 'Decorators are not valid here'。刻意不 extends 根配置：oxc 解析 extends 的相对路径会以仓库根为基准，反而找不到文件。",
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  }
+}
