@@ -5,6 +5,7 @@
     { "path": "packages/config" },
     { "path": "packages/logger" },
     { "path": "packages/test-utils" },
+    { "path": "prisma" },
     { "path": "apps/api" },
     { "path": "apps/worker" }
   ]

@@ -20,8 +20,13 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['packages/*/src/**/*.spec.ts', 'apps/*/test/**/*.spec.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', '**/.next/**'],
+    include: [
+      'packages/*/src/**/*.spec.ts',
+      'apps/*/test/**/*.spec.ts',
+      'prisma/__tests__/*.spec.ts',
+    ],
+    // *.integration.spec.ts 需要真实 MySQL，单独用 pnpm test:db 跑。
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/*.integration.spec.ts'],
     reporters: ['default'],
   },
 });

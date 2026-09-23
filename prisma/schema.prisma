@@ -1,0 +1,663 @@
+// =============================================================================
+// Signal — 唯一 Prisma Schema
+//
+// Owner: Agent 01（《Signal 多 Agent 执行规则 v1.0》§6 / §10）
+// 基线：docs/03-database-design.md、docs/05-enums-state-machines.md、
+//       docs/12-search-cache-api.md、docs/22-source-evidence-model.md
+//
+// 约定：
+//   - MySQL 是唯一业务事实来源；时间一律存 UTC（docs/01）。
+//   - 主键 BIGINT UNSIGNED，API 层序列化为 string（docs/02）。
+//   - 枚举值必须与 @signal/contracts 逐字一致（有测试守卫）。
+//   - V1 不存在任何订阅表（person/topic/source_subscriptions 一律禁止）。
+//
+// 相对 reference/schema.prisma 的调整（业务语义不变）：
+//   1. 补齐 docs/12 要求的 FULLTEXT 索引（title / summary / body_translated）。
+//   2. 适配 Prisma 7 的语法。
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums — 与 docs/05 + @signal/contracts 逐字一致
+// -----------------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum UserTheme {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+enum ArticleFontSize {
+  SMALL
+  DEFAULT
+  LARGE
+}
+
+/// 采集 Adapter 类型：决定「怎么抓」
+enum SourceType {
+  RSS
+  X_USER
+  GITHUB_REPO
+  HACKER_NEWS
+  HUGGINGFACE
+  MANUAL_URL
+}
+
+/// 来源业务身份：决定「这是谁」
+enum SourceKind {
+  OFFICIAL
+  PERSON
+  MEDIA
+  COMMUNITY
+  DEVELOPER
+  GOVERNMENT
+  TREND
+}
+
+/// 编辑配置的来源等级，AI 无权自动改写
+enum SourceTier {
+  S
+  A
+  B
+  C
+}
+
+enum EvidenceType {
+  PRIMARY_SOURCE
+  OFFICIAL_CONFIRMATION
+  SUPPORTING_SOURCE
+  SOCIAL_CONFIRMATION
+  RELATED_DISCUSSION
+}
+
+enum ContentType {
+  ARTICLE
+  X_POST
+  GITHUB_REPO
+  GITHUB_RELEASE
+  HN_STORY
+  MODEL
+  SHORT_POST
+}
+
+enum RawItemStatus {
+  FETCHED
+  NORMALIZED
+  DUPLICATE
+  READY_FOR_ANALYSIS
+  FAILED
+}
+
+/// APPROVED 只代表审核通过，不代表已发布
+enum ContentPipelineStatus {
+  INGESTED
+  ANALYZING
+  REVIEW_PENDING
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum EditorialReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DEFERRED
+}
+
+enum DailyEditionStatus {
+  DRAFT
+  REVIEWING
+  SCHEDULED
+  PUBLISHED
+  CANCELLED
+}
+
+enum DailySectionType {
+  FRONT_PAGE
+  AI
+  PRODUCT
+  DEVELOPMENT
+  TECH
+  X_VOICES
+  BRIEFS
+}
+
+enum DailyDisplayStyle {
+  LEAD
+  MAJOR
+  STANDARD
+  BRIEF
+}
+
+enum AiTaskType {
+  LANGUAGE_DETECT
+  TRANSLATE
+  CLASSIFY
+  SCORE
+  DEDUP_VERIFY
+  EVENT_CLUSTER
+  DAILY_DRAFT
+}
+
+enum AiRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum JobRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+// -----------------------------------------------------------------------------
+// Identity / Auth  (docs/03: users / auth_accounts / email_otp_codes / sessions)
+// -----------------------------------------------------------------------------
+
+model User {
+  id          BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  email       String?    @unique @db.VarChar(255)
+  displayName String?    @map("display_name") @db.VarChar(120)
+  avatarUrl   String?    @map("avatar_url") @db.VarChar(1024)
+  role        UserRole   @default(USER)
+  status      UserStatus @default(ACTIVE)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+
+  authAccounts    AuthAccount[]
+  sessions        Session[]
+  bookmarks       Bookmark[]
+  readingProgress ReadingProgress[]
+  preference      UserPreference?
+
+  @@map("users")
+}
+
+model AuthAccount {
+  id                    BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId                BigInt    @map("user_id") @db.UnsignedBigInt
+  provider              String    @db.VarChar(40)
+  providerAccountId     String    @map("provider_account_id") @db.VarChar(255)
+  accessTokenEncrypted  String?   @map("access_token_encrypted") @db.Text
+  refreshTokenEncrypted String?   @map("refresh_token_encrypted") @db.Text
+  expiresAt             DateTime? @map("expires_at") @db.DateTime(3)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+/// Email OTP 只存 hash，绝不存明文（docs/14 / docs/17）
+model EmailOtpCode {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  email         String    @db.VarChar(255)
+  codeHash      String    @map("code_hash") @db.VarChar(128)
+  expiresAt     DateTime  @map("expires_at") @db.DateTime(3)
+  consumedAt    DateTime? @map("consumed_at") @db.DateTime(3)
+  requestIpHash String?   @map("request_ip_hash") @db.VarChar(128)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([email, expiresAt])
+  @@map("email_otp_codes")
+}
+
+model Session {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId           BigInt    @map("user_id") @db.UnsignedBigInt
+  refreshTokenHash String    @unique @map("refresh_token_hash") @db.VarChar(128)
+  userAgentHash    String?   @map("user_agent_hash") @db.VarChar(128)
+  ipHash           String?   @map("ip_hash") @db.VarChar(128)
+  expiresAt        DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt        DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// 明确字段，不用一个无限扩张的 JSON 代替（docs/03）
+model UserPreference {
+  userId             BigInt          @id @map("user_id") @db.UnsignedBigInt
+  theme              UserTheme       @default(SYSTEM)
+  articleFontSize    ArticleFontSize @default(DEFAULT) @map("article_font_size")
+  defaultTranslation Boolean         @default(false) @map("default_translation")
+  updatedAt          DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// -----------------------------------------------------------------------------
+// Source Registry  (docs/03 / docs/06 / docs/22)
+// -----------------------------------------------------------------------------
+
+/// X 动态白名单就是 type=X_USER 的 Source，不存在用户自己的 follow list（规则 §12）
+model Source {
+  id                   BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  name                 String     @db.VarChar(255)
+  slug                 String     @unique @db.VarChar(255)
+  type                 SourceType
+  kind                 SourceKind
+  tier                 SourceTier @default(B)
+  official             Boolean    @default(false)
+  baseUrl              String?    @map("base_url") @db.VarChar(2048)
+  feedUrl              String?    @map("feed_url") @db.VarChar(2048)
+  externalId           String?    @map("external_id") @db.VarChar(255)
+  language             String?    @db.Char(5)
+  priority             Int        @default(50) @db.TinyInt
+  trustScore           Decimal    @default(7.0) @map("trust_score") @db.Decimal(4, 1)
+  fetchIntervalSeconds Int        @default(1800) @map("fetch_interval_seconds")
+  enabled              Boolean    @default(true)
+  config               Json?
+  lastFetchedAt        DateTime?  @map("last_fetched_at") @db.DateTime(3)
+  nextFetchAt          DateTime?  @map("next_fetch_at") @db.DateTime(3)
+  lastSuccessAt        DateTime?  @map("last_success_at") @db.DateTime(3)
+  lastErrorAt          DateTime?  @map("last_error_at") @db.DateTime(3)
+  lastErrorCode        String?    @map("last_error_code") @db.VarChar(120)
+  createdAt            DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+
+  rawItems  RawItem[]
+  contents  Content[]
+  evidences EventEvidence[]
+
+  @@index([enabled, nextFetchAt])
+  @@index([type, enabled])
+  @@index([kind, tier, enabled])
+  @@map("sources")
+}
+
+/// 人物只用于资料与内容聚合，不再与用户订阅产生任何关系（docs/03）
+model Person {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name           String   @db.VarChar(255)
+  slug           String   @unique @db.VarChar(255)
+  xHandle        String?  @unique @map("x_handle") @db.VarChar(255)
+  avatarUrl      String?  @map("avatar_url") @db.VarChar(2048)
+  bio            String?  @db.Text
+  category       String?  @db.VarChar(120)
+  verifiedSource Boolean  @default(false) @map("verified_source")
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  contents Content[]
+
+  @@map("people")
+}
+
+/// Topics 仅用于分类、导航和搜索，不是订阅对象
+model Topic {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name          String   @db.VarChar(255)
+  slug          String   @unique @db.VarChar(255)
+  description   String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  contentTopics ContentTopic[]
+
+  @@map("topics")
+}
+
+// -----------------------------------------------------------------------------
+// Raw ingest → Content → Event → Evidence
+// -----------------------------------------------------------------------------
+
+model RawItem {
+  id               BigInt        @id @default(autoincrement()) @db.UnsignedBigInt
+  sourceId         BigInt        @map("source_id") @db.UnsignedBigInt
+  externalId       String?       @map("external_id") @db.VarChar(512)
+  originalUrl      String        @map("original_url") @db.VarChar(2048)
+  canonicalUrl     String        @map("canonical_url") @db.VarChar(2048)
+  canonicalUrlHash String        @map("canonical_url_hash") @db.Char(64)
+  titleRaw         String?       @map("title_raw") @db.Text
+  bodyRaw          String?       @map("body_raw") @db.LongText
+  payload          Json?
+  language         String?       @db.Char(5)
+  publishedAt      DateTime?     @map("published_at") @db.DateTime(3)
+  fetchedAt        DateTime      @map("fetched_at") @db.DateTime(3)
+  contentHash      String?       @map("content_hash") @db.Char(64)
+  status           RawItemStatus
+  failureCode      String?       @map("failure_code") @db.VarChar(120)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+
+  source  Source   @relation(fields: [sourceId], references: [id])
+  content Content?
+
+  @@index([sourceId, externalId])
+  @@index([canonicalUrlHash])
+  @@index([contentHash])
+  @@map("raw_items")
+}
+
+/// 一个事件。independentSourceCount 由查询时按不同 source_id 计算，不冗余存储（docs/03）
+model Event {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  canonicalTitle   String   @map("canonical_title") @db.VarChar(500)
+  summary          String?  @db.Text
+  primaryContentId BigInt?  @map("primary_content_id") @db.UnsignedBigInt
+  /// 注意：docs/05 未定义 EventStatus 枚举，按 reference schema 保持为字符串。
+  status           String   @db.VarChar(40)
+  firstSeenAt      DateTime @map("first_seen_at") @db.DateTime(3)
+  lastSeenAt       DateTime @map("last_seen_at") @db.DateTime(3)
+  createdAt        DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  contents      Content[]
+  eventContents EventContent[]
+  evidences     EventEvidence[]
+
+  @@index([lastSeenAt])
+  @@map("events")
+}
+
+/// 证据链：即使某个链接没有晋升为完整 Content，也可以成为 Evidence（docs/22）
+model EventEvidence {
+  id           BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  eventId      BigInt       @map("event_id") @db.UnsignedBigInt
+  contentId    BigInt?      @map("content_id") @db.UnsignedBigInt
+  sourceId     BigInt?      @map("source_id") @db.UnsignedBigInt
+  evidenceType EvidenceType @map("evidence_type")
+  title        String?      @db.VarChar(700)
+  url          String       @db.VarChar(2048)
+  urlHash      String       @map("url_hash") @db.Char(64)
+  publishedAt  DateTime?    @map("published_at") @db.DateTime(3)
+  isPrimary    Boolean      @default(false) @map("is_primary")
+  confidence   Decimal?     @db.Decimal(4, 3)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  content Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+  source  Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, urlHash])
+  @@index([eventId, isPrimary])
+  @@index([eventId, sourceId])
+  @@index([sourceId, publishedAt])
+  @@map("event_evidence")
+}
+
+model Content {
+  id                   BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  sourceId             BigInt                @map("source_id") @db.UnsignedBigInt
+  authorPersonId       BigInt?               @map("author_person_id") @db.UnsignedBigInt
+  eventId              BigInt?               @map("event_id") @db.UnsignedBigInt
+  rawItemId            BigInt?               @unique @map("raw_item_id") @db.UnsignedBigInt
+  type                 ContentType
+  title                String                @db.VarChar(700)
+  summary              String?               @db.Text
+  /// 翻译永远不能覆盖原文（docs/00），两列并存
+  bodyOriginal         String?               @map("body_original") @db.LongText
+  bodyTranslated       String?               @map("body_translated") @db.LongText
+  language             String                @db.Char(5)
+  originalUrl          String                @map("original_url") @db.VarChar(2048)
+  imageUrl             String?               @map("image_url") @db.VarChar(2048)
+  publishedAt          DateTime?             @map("published_at") @db.DateTime(3)
+  pipelineStatus       ContentPipelineStatus @map("pipeline_status")
+  // 六维分数 + finalScore（docs/03）
+  importanceScore      Decimal?              @map("importance_score") @db.Decimal(4, 1)
+  noveltyScore         Decimal?              @map("novelty_score") @db.Decimal(4, 1)
+  relevanceScore       Decimal?              @map("relevance_score") @db.Decimal(4, 1)
+  credibilityScore     Decimal?              @map("credibility_score") @db.Decimal(4, 1)
+  densityScore         Decimal?              @map("density_score") @db.Decimal(4, 1)
+  readValueScore       Decimal?              @map("read_value_score") @db.Decimal(4, 1)
+  finalScore           Decimal?              @map("final_score") @db.Decimal(5, 2)
+  recommendationReason String?               @map("recommendation_reason") @db.Text
+  aiAnalysis           Json?                 @map("ai_analysis")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.DateTime(3)
+
+  source       Source          @relation(fields: [sourceId], references: [id])
+  authorPerson Person?         @relation(fields: [authorPersonId], references: [id])
+  event        Event?          @relation(fields: [eventId], references: [id])
+  rawItem      RawItem?        @relation(fields: [rawItemId], references: [id])
+  topics       ContentTopic[]
+  eventContent EventContent?
+  evidences    EventEvidence[]
+  review       EditorialReview?
+  featured     FeaturedItem?
+  dailyItems   DailyItem[]
+  bookmarks    Bookmark[]
+  aiRuns       AiRun[]
+
+  @@index([pipelineStatus, finalScore, publishedAt])
+  @@index([sourceId, publishedAt])
+  @@index([eventId])
+  // docs/12：V1 搜索使用 MySQL FULLTEXT，覆盖 title / summary / bodyTranslated
+  @@fulltext([title, summary, bodyTranslated])
+  @@map("contents")
+}
+
+model ContentTopic {
+  contentId  BigInt  @map("content_id") @db.UnsignedBigInt
+  topicId    BigInt  @map("topic_id") @db.UnsignedBigInt
+  confidence Decimal @db.Decimal(4, 3)
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([contentId, topicId])
+  @@map("content_topics")
+}
+
+/// event_contents：这个 Content 属于哪个事件
+/// event_evidence：哪些证据支持该事件 —— 两者不要合并（docs/03）
+model EventContent {
+  eventId   BigInt   @map("event_id") @db.UnsignedBigInt
+  contentId BigInt   @unique @map("content_id") @db.UnsignedBigInt
+  relation  String   @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, contentId])
+  @@map("event_contents")
+}
+
+// -----------------------------------------------------------------------------
+// Editorial review / Publishing
+// -----------------------------------------------------------------------------
+
+model EditorialReview {
+  id                    BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId             BigInt                @unique @map("content_id") @db.UnsignedBigInt
+  status                EditorialReviewStatus @default(PENDING)
+  publishFeatured       Boolean               @default(false) @map("publish_featured")
+  includeDailyCandidate Boolean               @default(false) @map("include_daily_candidate")
+  adminNote             String?               @map("admin_note") @db.Text
+  reviewedByUserId      BigInt?               @map("reviewed_by_user_id") @db.UnsignedBigInt
+  reviewedAt            DateTime?             @map("reviewed_at") @db.DateTime(3)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt             DateTime              @updatedAt @map("updated_at") @db.DateTime(3)
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@map("editorial_reviews")
+}
+
+model FeaturedItem {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId     BigInt   @unique @map("content_id") @db.UnsignedBigInt
+  customTitle   String?  @map("custom_title") @db.VarChar(700)
+  customSummary String?  @map("custom_summary") @db.Text
+  sortWeight    Int      @default(0) @map("sort_weight")
+  publishedAt   DateTime @map("published_at") @db.DateTime(3)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  content Content @relation(fields: [contentId], references: [id])
+
+  @@index([active, publishedAt])
+  @@map("featured_items")
+}
+
+/// businessDate 表示 Asia/Shanghai 业务日（docs/00）
+model DailyEdition {
+  id           BigInt             @id @default(autoincrement()) @db.UnsignedBigInt
+  businessDate DateTime           @unique @map("business_date") @db.Date
+  editionNo    Int?               @unique @map("edition_no")
+  status       DailyEditionStatus @default(DRAFT)
+  headline     String?            @db.VarChar(700)
+  scheduledAt  DateTime?          @map("scheduled_at") @db.DateTime(3)
+  publishedAt  DateTime?          @map("published_at") @db.DateTime(3)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.DateTime(3)
+
+  sections DailySection[]
+
+  @@index([status, businessDate])
+  @@map("daily_editions")
+}
+
+model DailySection {
+  id        BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  editionId BigInt           @map("edition_id") @db.UnsignedBigInt
+  type      DailySectionType
+  title     String           @db.VarChar(255)
+  sortOrder Int              @map("sort_order")
+
+  edition DailyEdition @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  items   DailyItem[]
+
+  @@unique([editionId, sortOrder])
+  @@map("daily_sections")
+}
+
+model DailyItem {
+  id             BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  sectionId      BigInt            @map("section_id") @db.UnsignedBigInt
+  contentId      BigInt            @map("content_id") @db.UnsignedBigInt
+  displayStyle   DailyDisplayStyle @map("display_style")
+  sortOrder      Int               @map("sort_order")
+  customHeadline String?           @map("custom_headline") @db.VarChar(700)
+  customExcerpt  String?           @map("custom_excerpt") @db.Text
+
+  section DailySection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  content Content      @relation(fields: [contentId], references: [id])
+
+  @@unique([sectionId, contentId])
+  @@unique([sectionId, sortOrder])
+  @@map("daily_items")
+}
+
+// -----------------------------------------------------------------------------
+// User features — 只有 Bookmark / ReadingProgress / UserPreference
+// V1 已取消全部订阅能力（规则 §13）
+// -----------------------------------------------------------------------------
+
+model Bookmark {
+  userId    BigInt   @map("user_id") @db.UnsignedBigInt
+  contentId BigInt   @map("content_id") @db.UnsignedBigInt
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, contentId])
+  @@map("bookmarks")
+}
+
+model ReadingProgress {
+  userId       BigInt    @map("user_id") @db.UnsignedBigInt
+  resourceType String    @map("resource_type") @db.VarChar(30)
+  resourceId   BigInt    @map("resource_id") @db.UnsignedBigInt
+  progress     Decimal   @db.Decimal(5, 4)
+  lastPosition String?   @map("last_position") @db.VarChar(255)
+  completedAt  DateTime? @map("completed_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, resourceType, resourceId])
+  @@map("reading_progress")
+}
+
+// -----------------------------------------------------------------------------
+// Ops / AI audit
+// -----------------------------------------------------------------------------
+
+model AiRun {
+  id               BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId        BigInt?     @map("content_id") @db.UnsignedBigInt
+  taskType         AiTaskType  @map("task_type")
+  provider         String      @db.VarChar(80)
+  model            String      @db.VarChar(120)
+  promptVersion    String      @map("prompt_version") @db.VarChar(80)
+  status           AiRunStatus
+  inputTokens      Int?        @map("input_tokens")
+  outputTokens     Int?        @map("output_tokens")
+  estimatedCostUsd Decimal?    @map("estimated_cost_usd") @db.Decimal(12, 6)
+  durationMs       Int?        @map("duration_ms")
+  errorCode        String?     @map("error_code") @db.VarChar(120)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+
+  content Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+
+  @@index([contentId, taskType])
+  @@index([createdAt])
+  @@map("ai_runs")
+}
+
+model JobRun {
+  id         BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  jobType    String       @map("job_type") @db.VarChar(120)
+  jobKey     String?      @map("job_key") @db.VarChar(255)
+  status     JobRunStatus
+  startedAt  DateTime     @map("started_at") @db.DateTime(3)
+  finishedAt DateTime?    @map("finished_at") @db.DateTime(3)
+  attempts   Int          @default(0)
+  errorCode  String?      @map("error_code") @db.VarChar(120)
+  metadata   Json?
+
+  @@index([jobType, status, startedAt])
+  @@index([jobKey])
+  @@map("job_runs")
+}
+
+model AdminNotification {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  type        String    @db.VarChar(80)
+  title       String    @db.VarChar(255)
+  body        String    @db.Text
+  targetUrl   String?   @map("target_url") @db.VarChar(2048)
+  /// 注意：docs/05 未定义 NotificationStatus 枚举，按 reference schema 保持字符串。
+  status      String    @default("UNREAD") @db.VarChar(20)
+  emailStatus String    @default("NONE") @map("email_status") @db.VarChar(20)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  readAt      DateTime? @map("read_at") @db.DateTime(3)
+
+  @@index([status, createdAt])
+  @@map("admin_notifications")
+}

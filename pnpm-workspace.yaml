@@ -1,3 +1,8 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+allowBuilds:
+  # Prisma 需要 postinstall 下载查询引擎；两个包均为 Prisma 官方包。
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
