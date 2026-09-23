@@ -50,6 +50,14 @@ JobRun            +块   @@index([jobKey])
 - 含 FULLTEXT：`contents_title_summary_body_translated_idx(title, summary, body_translated)`
 - **零** `DROP` / `TRUNCATE` / `DELETE`
 
+### ⚠ `20260923170000_fulltext_ngram/` — 必须的后续迁移
+
+初始迁移建的 FULLTEXT 用 MySQL **默认 parser**，中文整句会变成一个 token，
+导致 `AGAINST('模型')` **恒返回 0 行** —— 搜索对中文完全不可用。
+本迁移把它重建为 `WITH PARSER ngram`。详见文末补遗。
+
+**部署时必须同时应用这两个迁移，不能只应用初始迁移。**
+
 ### 3. `prisma/seed.ts` — 幂等 Seed
 
 - 1 个 ADMIN（`admin@signal.local`，可用 `SEED_ADMIN_EMAIL` 覆盖）+ 其默认偏好
@@ -59,14 +67,15 @@ JobRun            +块   @@index([jobKey])
 
 设计要点：
 
-- 全部 `upsert`，可反复执行；已存在记录**不覆盖**管理员的编辑
+- 全部 `upsert` 且 `update` 分支为空对象，可反复执行；已存在记录**不覆盖**管理员的编辑
+  （⚠ 初版在 update 分支回写 name/kind/tier/official，会静默回滚管理员编辑，已修复，见文末补遗）
 - 所有 seed 出来的 Source 在 `config` 里带 `{ seed: true, seedNote }`，便于识别示例数据
 - **不写入任何 Content / Event / Evidence** —— 那些必须由真实采集产生
 
 ### 4. 测试
 
 - `prisma/__tests__/schema-contract.spec.ts`（63 项，**不需要数据库**）
-- `prisma/__tests__/database.integration.spec.ts`（22 项，**需要真实 MySQL**）
+- `prisma/__tests__/database.integration.spec.ts`（26 项，**需要真实 MySQL**）
 
 ---
 
@@ -99,7 +108,7 @@ pnpm-lock.yaml        依赖锁定
 
 ## Database Migrations
 
-**`20260923160000_init`**
+**`20260923160000_init`** 与 **`20260923170000_fulltext_ngram`**（后者为中文搜索修复，见文末补遗）
 
 在**全新空库**上真实执行过：`pnpm db:migrate` → `All migrations have been successfully applied`。
 
@@ -108,6 +117,8 @@ pnpm-lock.yaml        依赖锁定
 ```
 signal 库表数量      25  （24 业务表 + _prisma_migrations）
 已应用迁移           20260923160000_init
+                     20260923170000_fulltext_ngram
+contents FULLTEXT    WITH PARSER ngram（已用 SHOW CREATE TABLE 确认）
 seed 数据            1 user / 8 topics / 8 sources（其中 X_USER 6 个）
 ```
 
@@ -206,7 +217,7 @@ Agent 01 **未注册任何 Queue 或 Job**。`JobRun` 表已就绪，供 Agent 0
 | 主键           | 19 个自增模型均为 `@id @default(autoincrement()) @db.UnsignedBigInt`                                                                                               |
 | 数据源         | `provider = "mysql"` + `url = env("DATABASE_URL")`                                                                                                                 |
 
-### 需要数据库（`pnpm test:db`，共 22 项）
+### 需要数据库（`pnpm test:db`，共 26 项）
 
 `prisma/__tests__/database.integration.spec.ts` —— 真连 MySQL：
 
@@ -232,8 +243,8 @@ Agent 01 **未注册任何 Queue 或 Job**。`JobRun` 表已就绪，供 Agent 0
 ```
 pnpm lint          ✓ 0 errors
 pnpm typecheck     ✓ tsc -b（含 prisma/seed.ts）+ web tsc --noEmit
-pnpm test          ✓ 13 files / 192 tests passed      （含本次新增 63 项）
-pnpm test:db       ✓ 1 file  / 22 tests passed        （真实 MySQL 8.4.11）
+pnpm test          ✓ 13 files / 215 tests passed      （含本次新增 63 项 + 23 项审查回归守卫）
+pnpm test:db       ✓ 1 file  / 26 tests passed        （真实 MySQL 8.4.11）
 pnpm format:check  ✓
 ```
 
@@ -375,18 +386,99 @@ pnpm test:db        # 数据库集成测试（需要 MySQL）
 
 `tasks/agent-01-database.md` 的验收项全部完成：
 
-| 要求                                               | 结果                                                    |
-| -------------------------------------------------- | ------------------------------------------------------- |
-| Source type/kind/tier/official                     | ✅                                                      |
-| Event / EventEvidence                              | ✅                                                      |
-| Content / Review / Featured / Daily                | ✅                                                      |
-| User / Auth / Session                              | ✅                                                      |
-| Bookmark / ReadingProgress / UserPreference        | ✅                                                      |
-| AiRun / JobRun / AdminNotification                 | ✅                                                      |
-| FULLTEXT 与关键索引                                | ✅ schema + migration + 真库检索三重验证                |
-| 不创建任何 Subscription 表                         | ✅ schema 静态检查 + 真库 `information_schema` 双向确认 |
-| Seed（1 ADMIN / Topic / 官方 RSS / 3–6 个 X_USER） | ✅ 1 + 8 + 2 + 6，且幂等                                |
-| 空库 migrate                                       | ✅ 在全新空库上真实执行成功                             |
-| 测试                                               | ✅ 63 项契约 + 22 项集成，全绿                          |
+| 要求                                               | 结果                                                               |
+| -------------------------------------------------- | ------------------------------------------------------------------ |
+| Source type/kind/tier/official                     | ✅                                                                 |
+| Event / EventEvidence                              | ✅                                                                 |
+| Content / Review / Featured / Daily                | ✅                                                                 |
+| User / Auth / Session                              | ✅                                                                 |
+| Bookmark / ReadingProgress / UserPreference        | ✅                                                                 |
+| AiRun / JobRun / AdminNotification                 | ✅                                                                 |
+| FULLTEXT 与关键索引                                | ✅ schema + migration + 真库检索（⚠ 初版对中文不可用，见文末补遗） |
+| 不创建任何 Subscription 表                         | ✅ schema 静态检查 + 真库 `information_schema` 双向确认            |
+| Seed（1 ADMIN / Topic / 官方 RSS / 3–6 个 X_USER） | ✅ 1 + 8 + 2 + 6，且幂等                                           |
+| 空库 migrate                                       | ✅ 在全新空库上真实执行成功                                        |
+| 测试                                               | ✅ 63 项契约 + 26 项集成，全绿                                     |
 
 **Agent 02 / 03 / 06 可以开始（Wave 1）。**
+
+---
+
+# 补遗（2026-09-23）：独立审查后的缺陷修复
+
+Agent 01 交付后做了一轮**独立批判性审查**（真跑实验、不看代码自述）。
+发现 2 个属于 Agent 01 范围的真 bug，均已修复并加了**有牙齿的**回归守卫。
+
+## 缺陷 1（P0，关键）：FULLTEXT 对中文完全失效
+
+**现象**：向 `contents` 插入中文内容后，真库实测：
+
+| 查询                                          | 命中             |
+| --------------------------------------------- | ---------------- |
+| `MATCH(...) AGAINST('模型')`                  | **0**            |
+| `AGAINST('推理成本')` / `AGAINST('基础模型')` | **0 / 0**        |
+| `LIKE '%模型%'`（对照）                       | **1** ← 数据在库 |
+
+**根因**：初始索引用 MySQL 默认 fulltext parser，按非字母数字边界切词。
+中文没有空格，「基础模型的能力评测与推理成本」整句变成**一个 token**，任何中文子串都查不到。
+
+**影响**：Signal 的主语言是中文（`docs/12` 要求的 `bodyTranslated` 就是中文译文），
+**V1 搜索对中文永远返回 0 条**，而所有测试都是绿的。
+
+**为什么初版没发现**：集成测试用了纯 ASCII 探针 `signalprobeunique`，
+只证明了拉丁文可用。**这是虚假保证**，是本补遗要纠正的最重要一点。
+
+**修复**：新增迁移 `20260923170000_fulltext_ngram`，把索引重建为 `WITH PARSER ngram`。
+
+```
+修复前  默认 parser：模型=0、推理成本=0、能力评测=0
+修复后  ngram parser：模型=1、推理成本=1、能力评测=1
+```
+
+**验证方式**：
+
+- 集成测试的探针**已改为中文**（title / summary / body_translated 三列各一条 + 英文对照一条）
+- **已确认这些用例有牙齿**：把索引临时换回默认 parser → 3 条中文用例变红、英文用例仍绿；恢复后全绿
+
+**注意**：Prisma 的 `@@fulltext` 无法表达 parser 选项，因此该属性只存在于迁移 SQL 里。
+已用 `prisma migrate diff --from-migrations --to-schema-datamodel` 验证**不产生 schema 漂移**
+（Prisma 不比对 parser 属性）。
+
+## 缺陷 2（中）：seed 回滚管理员的编辑
+
+**变更前**：`seedTopics` / `seedOfficialSources` / `seedXWhitelist` 的 `upsert.update`
+分支回写了 `name` / `description` / `kind` / `tier` / `official`。
+真库对照实验显示：**14 项可编辑字段里有 7 项会被静默打回 seed 值**，
+包括 `topics.description`（明显是编辑内容）和 X 白名单的 `tier`。
+
+这与代码注释和本 HANDOFF 原先「不覆盖管理员的编辑」的声称**矛盾**。
+
+**修复**：所有 `upsert` 的 `update` 改为空对象 —— **只补缺失的记录，绝不动已有记录**。
+
+**取舍**：代价是后续修改 seed 定义不会传播到已有环境。
+对 seed 而言「非破坏性」比「自动同步」更重要，且这与管理员的编辑权一致。
+
+**验证**：新增集成测试「不覆盖管理员对已存在记录的编辑（回归守卫）」，
+覆盖 `topics.name` / `topics.description` / `sources.name` / `sources.kind` /
+`sources.tier` / `sources.official` 六项。已确认该用例**有牙齿**
+（临时还原旧的 update 行为 → 精确变红）。
+
+## 测试数量变化
+
+```
+修复前  pnpm test    → 192 项 ； pnpm test:db → 22 项
+修复后  pnpm test    → 215 项 ； pnpm test:db → 26 项
+```
+
+其中 Agent 01 范围新增：3 条中文 FULLTEXT 守卫 + 1 条英文对照 + 1 条 seed 不覆盖守卫。
+
+## 新增的集成测试明细（FULLTEXT 段）
+
+原先 1 条 ASCII 用例，现改为：
+
+| 用例                               | 作用                       |
+| ---------------------------------- | -------------------------- |
+| 中文词能命中 title                 | 核心守卫                   |
+| 中文词能命中 body_translated       | 核心守卫（正文是中文译文） |
+| 中文词能命中 summary               | 核心守卫                   |
+| 英文检索在 ngram parser 下仍然可用 | 确认 ngram 不破坏拉丁文    |

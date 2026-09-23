@@ -134,22 +134,26 @@ export function parseEnv(raw: NodeJS.ProcessEnv | Record<string, unknown> = proc
 }
 
 /**
- * 从 API_BASE_URL 推导 API 监听端口。
+ * API 监听端口。
  *
- * 说明：docs/20 的 env 清单里没有 `API_PORT`，因此不新增变量，
- * 而是从已记录变量推导。Agent 11 若需要显式端口，应提交 Contract Change Request。
+ * `docs/20` 的 env 清单里没有 `API_PORT`，且规则禁止新增未记录变量，
+ * 因此这里用固定默认值 3001（避开 web 的 3000）。
+ *
+ * ⚠ 早期版本试图从 `API_BASE_URL` 推导监听端口，那是错的，已移除：
+ *   - 生产文档示例 `https://signal.example.com/api` → 推出 **443**。
+ *     443 是 nginx 对外暴露的端口，不是 api 容器的内部监听端口；
+ *     且 443 是特权端口，非 root 运行会直接 EACCES 启动失败。
+ *   - 开发文档示例 `http://localhost:3000/api` → 推出 **3000**。
+ *     Next.js web 默认也监听 3000，本地同时起 web + api 必然 EADDRINUSE。
+ *   - 原实现里的 3001 回退分支永远不可达（`API_BASE_URL` 已被 zod 校验为合法 URL，
+ *     `new URL()` 不会抛异常），属于死代码。
+ *
+ * `docs/16` 的部署形态是 nginx 反代到 api 的内部端口，因此固定 3001
+ * 对开发与生产两种形态都成立。
+ *
+ * 若将来确实需要可配置，应由 Agent 11 提交 CONTRACT_CHANGE_REQUEST 增加 `API_PORT`。
  */
 export const DEFAULT_API_PORT = 3001;
-
-export function resolveApiPort(env: Pick<AppEnv, 'API_BASE_URL'>): number {
-  try {
-    const parsed = new URL(env.API_BASE_URL);
-    if (parsed.port) return Number(parsed.port);
-    return parsed.protocol === 'https:' ? 443 : 80;
-  } catch {
-    return DEFAULT_API_PORT;
-  }
-}
 
 export function isProduction(env: Pick<AppEnv, 'NODE_ENV'>): boolean {
   return env.NODE_ENV === 'production';

@@ -124,6 +124,44 @@ describe('createLogger — secret 脱敏（docs/14 / docs/15）', () => {
   });
 });
 
+describe('原生 .child() 也必须脱敏（回归守卫）', () => {
+  it('pino 原生 child() 的 bindings 里的 secret 不落盘', () => {
+    // 实测：formatters.log 看不到 child bindings，formatters.bindings 也只在
+    // 创建时对 base 生效一次 —— 所以必须包装 .child() 本身，否则这里会明文泄漏。
+    const stream = createMemoryStream();
+    const logger = createLogger({ service: 'api', destination: stream });
+
+    logger.child({ password: 'P@ssw0rd123', authorization: 'Bearer SUPER_SECRET_JWT' }).info('x');
+
+    const raw = stream.lines.join('');
+    expect(raw).not.toContain('P@ssw0rd123');
+    expect(raw).not.toContain('SUPER_SECRET_JWT');
+    expect(raw).toContain(REDACTED);
+  });
+
+  it('多层 child() 依然脱敏', () => {
+    const stream = createMemoryStream();
+    const logger = createLogger({ service: 'api', destination: stream });
+
+    logger.child({ token: 'tok_live_abcdef' }).child({ password: 'hunter2' }).info('deep');
+
+    const raw = stream.lines.join('');
+    expect(raw).not.toContain('tok_live_abcdef');
+    expect(raw).not.toContain('hunter2');
+  });
+
+  it('child() 保留 requestId 等合法关联字段', () => {
+    const stream = createMemoryStream();
+    const logger = createLogger({ service: 'api', destination: stream });
+
+    logger.child({ requestId: 'req_1', userId: '42' }).info('ok');
+
+    const record = readSingle(stream);
+    expect(record.requestId).toBe('req_1');
+    expect(record.userId).toBe('42');
+  });
+});
+
 describe('childLogger', () => {
   it('绑定关联字段并继承脱敏', () => {
     const stream = createMemoryStream();

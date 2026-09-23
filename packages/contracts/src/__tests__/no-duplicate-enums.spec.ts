@@ -19,7 +19,15 @@ const CONTRACTS_SRC = join(REPO_ROOT, 'packages', 'contracts', 'src');
 const SCAN_ROOTS = ['packages', 'apps'];
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', 'coverage', '.git']);
 
-/** Frozen Contract 中的公共类型名（docs/05 + reference/contracts.ts）。 */
+/**
+ * Frozen Contract 中的公共名字（docs/05 枚举 + reference/contracts.ts DTO
+ * + docs/13 Queue/Job 名 + Error Code 注册表）。
+ *
+ * 早期版本只冻结了 27 个类型名，漏掉了 QueueName / JobName / JobId /
+ * PlatformErrorCode 这几个**常量**。而在 apps 里复制这几个常量恰恰是最容易发生的
+ * —— docs/13 明令「禁止创建近义 Queue」、docs/05 明令「禁止同义错误码」，
+ * 所以它们必须一起冻结。
+ */
 const FROZEN_TYPE_NAMES = [
   'UserRole',
   'UserStatus',
@@ -48,6 +56,21 @@ const FROZEN_TYPE_NAMES = [
   'PublicTopic',
   'PublicContent',
   'EvidenceSummary',
+  // Queue / Job 契约（docs/13）
+  'QueueName',
+  'JobName',
+  'JobId',
+  'QUEUE_NAMES',
+  'JOB_NAMES',
+  'JOB_TO_QUEUE',
+  'QUEUE_CONCURRENCY',
+  // Error Code 注册表（docs/05 / docs/15）
+  'PlatformErrorCode',
+  'DomainErrorCode',
+  // API 路径常量（docs/02）
+  'API_PREFIX',
+  'ADMIN_API_PREFIX',
+  'REQUEST_ID_HEADER',
 ];
 
 function collectSourceFiles(dir: string, found: string[] = []): string[] {

@@ -115,7 +115,9 @@ async function seedTopics(): Promise<void> {
   for (const topic of TOPICS) {
     await prisma.topic.upsert({
       where: { slug: topic.slug },
-      update: { name: topic.name, description: topic.description },
+      // update 留空：**只补缺失的记录，绝不覆盖管理员的编辑**。
+      // （早期版本在这里回写 name/description，会把管理员改过的名称/简介静默打回原值。）
+      update: {},
       create: topic,
     });
   }
@@ -141,7 +143,8 @@ async function seedOfficialSources(): Promise<void> {
     };
     await prisma.source.upsert({
       where: { slug: source.slug },
-      update: { name: data.name, kind: data.kind, tier: data.tier, official: data.official },
+      // update 留空：已存在的 Source 不覆盖（管理员可能改过 name/kind/tier/official）。
+      update: {},
       create: data,
     });
   }
@@ -174,7 +177,8 @@ async function seedXWhitelist(): Promise<void> {
     };
     await prisma.source.upsert({
       where: { slug },
-      update: { name: data.name, kind: data.kind, tier: data.tier },
+      // update 留空：已存在的白名单账号不覆盖（管理员可能已改 tier/kind/停用）。
+      update: {},
       create: data,
     });
   }

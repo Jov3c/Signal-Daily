@@ -5,7 +5,7 @@
  * 测试请 import `bootstrap.ts` 的 `createApiApp()`，不要 import 本文件。
  */
 
-import { parseEnv, resolveApiPort } from '@signal/config';
+import { DEFAULT_API_PORT, parseEnv } from '@signal/config';
 import { createLogger } from '@signal/logger';
 import { createApiApp } from './bootstrap';
 
@@ -19,9 +19,8 @@ async function main(): Promise<void> {
 
   try {
     const app = await createApiApp({ logger });
-    const port = resolveApiPort(env);
-    await app.listen(port);
-    logger.info({ port, apiPrefix: '/api/v1' }, 'signal api started');
+    await app.listen(DEFAULT_API_PORT);
+    logger.info({ port: DEFAULT_API_PORT, apiPrefix: '/api/v1' }, 'signal api started');
   } catch (error) {
     logger.error({ err: error }, 'signal api failed to start');
     process.exitCode = 1;

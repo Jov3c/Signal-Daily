@@ -89,7 +89,9 @@ export const DEFAULT_NOT_FOUND_HTTP_STATUS = 404;
 
 /** 根据错误码推断默认 HTTP status。 */
 export function defaultHttpStatusForCode(code: string): number {
-  if (code in PLATFORM_ERROR_HTTP_STATUS) {
+  // 必须用 Object.hasOwn 而不是 `in`：`in` 会命中原型链，
+  // 例如 `'constructor' in {...}` 为 true，会让 httpStatus 变成函数。
+  if (Object.hasOwn(PLATFORM_ERROR_HTTP_STATUS, code)) {
     return PLATFORM_ERROR_HTTP_STATUS[code as PlatformErrorCodeValue];
   }
   if (code.endsWith('_NOT_FOUND')) return DEFAULT_NOT_FOUND_HTTP_STATUS;

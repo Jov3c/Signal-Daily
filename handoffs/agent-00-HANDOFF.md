@@ -49,16 +49,16 @@
 - secret 变量拒绝 `.env.example` 的 `change-me` 占位值。
 - `APP_TIMEZONE` 用 `z.literal` 冻结为 `Asia/Shanghai`。
 - 业务时区工具：`businessTimezoneOffsetMs` / `businessDateOf` / `businessDayRangeUtc` / `businessTimeToUtc` / `formatInBusinessTimezone`。
-- `resolveApiPort()`：从 `API_BASE_URL` 推导监听端口，**不新增 env 变量**。
+- ~~`resolveApiPort()`：从 `API_BASE_URL` 推导监听端口~~ → **已移除**（该做法是错的），改为固定 `DEFAULT_API_PORT = 3001`，见文末补遗。
 
 ### 4. `@signal/logger`
 
 - Pino JSON，字段名严格按 `docs/15`：`timestamp`（非 pino 默认的 `time`）、`level`（字符串）、`service`，以及可选的 `requestId` / `userId` / `sourceId` / `contentId` / `jobId` / `errorCode` / `durationMs`。
-- 深度 secret 脱敏（`formatters.log` 钩子）：
+- 深度 secret 脱敏（`formatters.log` 钩子 + 包装后的 `.child()`，见文末补遗）：
   - 按字段名整值脱敏 password / token / secret / otp / apiKey / authorization / cookie / dsn / credential / sessionId 等；
   - 按内容模式脱敏连接串密码（`mysql://u:***@h`）与内联 `Bearer`/`Basic` 凭据；
   - **不误伤** `code` / `errorCode` / `statusCode` 等业务字段；
-  - 处理循环引用，保留 Date / Error / 类实例原型。
+  - 处理循环引用；非循环的共享引用正常展开（见文末补遗）。
 - `childLogger()`、`serializeError()`、`silentLogger()`。
 - `createNestLoggerBridge()`：把 logger 接到 Nest 内部日志，**不引入 `@nestjs/*` 依赖**（结构化类型满足 `LoggerService`）。
 
@@ -437,3 +437,70 @@ Agent 00 的 5 项验收全部通过：
 | logger secret redaction                         | ✅ 27 项测试，密码/token/OTP/Authorization/连接串凭据均不明文 |
 
 **Agent 01 / 02 / 03 / 06 可以开始（Wave 0 剩余 + Wave 1）。**
+
+---
+
+# 补遗（2026-09-23）：独立审查后的缺陷修复
+
+Agent 01 完成后，对 `packages/**`（Agent 00 交付物）做了一轮**独立批判性审查**，
+发现并修复了 4 个**真 bug**。以下内容修正了本文件前面若干处过于乐观的声称。
+
+## 修复清单
+
+| #   | 严重度         | 问题                                                                                                                                  | 位置                                |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| 1   | **高（安全）** | pino 原生 `.child({ password })` 的 bindings **完全未脱敏**，明文落盘                                                                 | `packages/logger/src/logger.ts`     |
+| 2   | **高（安全）** | **类实例完全不脱敏** —— `logger.info({ req })` 传入 Node `IncomingMessage` 时完整 Authorization / Cookie 明文落盘                     | `packages/logger/src/redact.ts`     |
+| 3   | 中高           | `resolveApiPort` 从**公开 URL** 推导**监听端口**：生产推出 443（特权端口）、开发推出 3000（与 Next 抢端口），且 3001 回退分支是死代码 | `packages/config/src/env.ts`        |
+| 4   | 中             | `redactSecrets` 把**非循环的共享引用**误判为 `[Circular]`，静默丢日志数据                                                             | `packages/logger/src/redact.ts`     |
+| 5   | 低中           | `no-duplicate-enums` 守卫漏掉 `QueueName` / `JobName` / `JobId` / `PlatformErrorCode` 等常量                                          | `packages/contracts/src/__tests__/` |
+| 6   | 低             | `code in PLATFORM_ERROR_HTTP_STATUS` 会命中原型链，`httpStatus` 可能变成函数                                                          | `packages/contracts/src/errors.ts`  |
+
+## 关键修复细节（下游必须了解）
+
+### `.child()` 必须包装，`formatters` 兜不住
+
+实测结论（pino 9，已写入代码注释）：
+
+- `formatters.log` **看不到** child bindings
+- `formatters.bindings` 只在创建时对 **base** bindings 生效一次
+
+因此 `createLogger()` 现在会**包装返回对象的 `.child()`**（递归），保证任意层级的 child 都经过脱敏。
+下游请继续优先使用 `childLogger(logger, context)`；直接调 `.child()` 也已安全。
+
+### 类实例现在会被递归脱敏
+
+原先 `redactValue` 对非普通对象直接原样返回。但 Node 的 `IncomingMessage` **必然是类实例**，
+`logger.info({ req })` 是最标准的请求日志写法 —— 这条路径会泄漏完整请求头。
+
+现在的规则：
+
+- `Date` / `Buffer` → 原样保留（pino 自己会正确序列化）
+- `Error` → 收敛为 `name` / `message` / `stack` + 递归自定义属性（**信息比修复前更完整**）
+- 带 `toJSON` 的对象（如 `Prisma.Decimal`）→ 按其 JSON 语义展开，不退化成内部字段
+- 其余对象（含类实例）→ 递归自有可枚举属性
+
+### `DEFAULT_API_PORT` 取代 `resolveApiPort`（**破坏性变更**）
+
+`resolveApiPort()` 已**移除**。API 现在固定监听 `DEFAULT_API_PORT = 3001`。
+
+理由：从公开 URL 推导监听端口这个思路本身是错的（生产文档示例会推出 443，开发示例会推出 3000 与 web 冲突），
+而 `docs/16` 的部署形态是 nginx 反代到 api 的内部端口，固定 3001 对两种环境都成立。
+
+**若 Agent 11 / 14 认为需要可配置端口，请提交 CONTRACT_CHANGE_REQUEST 增加 `API_PORT`。**
+在那之前不要重新引入任何形式的端口推导。
+
+## 测试变化
+
+新增 **23 项回归守卫**（`packages/logger`、`packages/config`、`packages/contracts`），
+其中包含把「类实例原样返回」这条**曾经固化漏洞的断言**改成正确行为。
+
+```
+修复前  pnpm test  → 192 项
+修复后  pnpm test  → 215 项
+```
+
+## 对其他声称的更正
+
+- 本文件未涉及 FULLTEXT 与 seed 的两个缺陷（属 Agent 01 范围），
+  详见 `handoffs/agent-01-HANDOFF.md` 的补遗章节。

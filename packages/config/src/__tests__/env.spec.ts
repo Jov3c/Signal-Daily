@@ -9,7 +9,6 @@ import {
   isProduction,
   isTest,
   parseEnv,
-  resolveApiPort,
 } from '../index';
 
 describe('env 校验（docs/20）', () => {
@@ -160,12 +159,11 @@ describe('运行环境判断与端口推导', () => {
     expect(isDevelopment(parseEnv(createTestEnv({ NODE_ENV: 'development' })))).toBe(true);
   });
 
-  it('从 API_BASE_URL 推导端口，不新增 env 变量', () => {
-    expect(resolveApiPort({ API_BASE_URL: 'http://localhost:3000/api' })).toBe(3000);
-    expect(resolveApiPort({ API_BASE_URL: 'https://signal.example.com/api' })).toBe(443);
-  });
-
-  it('无法解析时回退到默认端口', () => {
-    expect(resolveApiPort({ API_BASE_URL: 'not-a-url' })).toBe(DEFAULT_API_PORT);
+  it('API 监听端口是固定默认值，不从 API_BASE_URL 推导', () => {
+    // 回归守卫：早期版本从 API_BASE_URL 推导监听端口，导致生产推出 443、
+    // 开发推出 3000（与 Next.js 抢端口）。这里锁死为固定默认值。
+    expect(DEFAULT_API_PORT).toBe(3001);
+    expect(DEFAULT_API_PORT).not.toBe(3000); // 不与 web 冲突
+    expect(DEFAULT_API_PORT).toBeGreaterThan(1023); // 非特权端口，非 root 也能监听
   });
 });

@@ -199,6 +199,72 @@ describe('Seed 幂等', () => {
       expect(source.config).toMatchObject({ seed: true });
     }
   });
+
+  it('不覆盖管理员对已存在记录的编辑（回归守卫）', async () => {
+    // 早期版本在 upsert 的 update 分支里回写 name/kind/tier/official，
+    // 会把管理员在后台改过的内容静默打回 seed 值
+    // （实测 14 项可编辑字段里有 7 项被回滚）。
+    // 现在所有 upsert 的 update 都是空对象：只补缺失，绝不动已有记录。
+    const topic = await prisma.topic.findFirstOrThrow({ where: { slug: 'ai-models' } });
+    const source = await prisma.source.findFirstOrThrow({ where: { slug: 'x-karpathy' } });
+
+    const original = {
+      topicName: topic.name,
+      topicDescription: topic.description,
+      sourceName: source.name,
+      sourceKind: source.kind,
+      sourceTier: source.tier,
+      sourceOfficial: source.official,
+    };
+
+    const EDITED = {
+      topicName: '管理员改过的名字',
+      topicDescription: '管理员改过的简介',
+      sourceName: '管理员改过的来源名',
+    };
+
+    try {
+      await prisma.topic.update({
+        where: { id: topic.id },
+        data: { name: EDITED.topicName, description: EDITED.topicDescription },
+      });
+      await prisma.source.update({
+        where: { id: source.id },
+        data: {
+          name: EDITED.sourceName,
+          kind: SourceKind.MEDIA,
+          tier: SourceTier.C,
+          official: true,
+        },
+      });
+
+      runSeed();
+
+      const afterTopic = await prisma.topic.findUniqueOrThrow({ where: { id: topic.id } });
+      const afterSource = await prisma.source.findUniqueOrThrow({ where: { id: source.id } });
+
+      expect(afterTopic.name).toBe(EDITED.topicName);
+      expect(afterTopic.description).toBe(EDITED.topicDescription);
+      expect(afterSource.name).toBe(EDITED.sourceName);
+      expect(afterSource.kind).toBe(SourceKind.MEDIA);
+      expect(afterSource.tier).toBe(SourceTier.C);
+      expect(afterSource.official).toBe(true);
+    } finally {
+      await prisma.topic.update({
+        where: { id: topic.id },
+        data: { name: original.topicName, description: original.topicDescription },
+      });
+      await prisma.source.update({
+        where: { id: source.id },
+        data: {
+          name: original.sourceName,
+          kind: original.sourceKind,
+          tier: original.sourceTier,
+          official: original.sourceOfficial,
+        },
+      });
+    }
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -553,49 +619,99 @@ describe('用户能力：Bookmark / ReadingProgress / UserPreference', () => {
 
 /* ------------------------------------------------------------------ */
 
-describe('FULLTEXT 实际可用（docs/12）', () => {
-  const PROBE = 'signalprobeunique';
+describe('FULLTEXT 对中文真实可用（docs/12）', () => {
+  // ⚠ 回归守卫：探针**必须用中文**。
+  //
+  // 初始迁移建的 FULLTEXT 用 MySQL 默认 parser，中文没有空格，
+  // 「基础模型的能力评测」整句会变成一个 token —— AGAINST('模型') 恒返回 0 行。
+  // 早期版本的这条用例用纯 ASCII 探针（signalprobeunique）测试，
+  // 只证明了拉丁文可用，对中文给出的是**虚假保证**。
+  // 修复后（migration 20260923170000_fulltext_ngram）中文子串可正常命中。
 
-  it('MATCH ... AGAINST 能检索到 title / summary / body_translated 中的词', async () => {
+  async function createSourceForFulltext(): Promise<bigint> {
     const source = await prisma.source.create({
       data: {
         name: `${TAG} ft source`,
-        slug: `${TAG}-ft-source`,
+        slug: uniq(),
         type: SourceType.RSS,
         kind: SourceKind.MEDIA,
       },
     });
+    return source.id;
+  }
 
-    const byTitle = await prisma.content.create({
-      data: {
-        sourceId: source.id,
-        type: 'ARTICLE',
-        title: `${PROBE} 出现在标题`,
-        language: 'zh',
-        originalUrl: `https://example.com/${TAG}/ft-title`,
-        pipelineStatus: 'INGESTED',
-      },
-    });
-    const byBody = await prisma.content.create({
-      data: {
-        sourceId: source.id,
-        type: 'ARTICLE',
-        title: `${TAG} 无关标题`,
-        bodyTranslated: `正文里包含 ${PROBE} 这个词`,
-        language: 'zh',
-        originalUrl: `https://example.com/${TAG}/ft-body`,
-        pipelineStatus: 'INGESTED',
-      },
-    });
-
+  async function matchAgainst(term: string): Promise<Set<string>> {
     const rows = await prisma.$queryRaw<{ id: bigint }[]>`
       SELECT id FROM contents
-      WHERE MATCH(title, summary, body_translated) AGAINST (${PROBE} IN NATURAL LANGUAGE MODE)
+      WHERE MATCH(title, summary, body_translated) AGAINST (${term} IN NATURAL LANGUAGE MODE)
     `;
-    const ids = rows.map((r) => r.id.toString());
+    return new Set(rows.map((r) => r.id.toString()));
+  }
 
-    expect(ids).toContain(byTitle.id.toString());
-    expect(ids).toContain(byBody.id.toString());
+  it('中文词能命中 title', async () => {
+    const sourceId = await createSourceForFulltext();
+    const content = await prisma.content.create({
+      data: {
+        sourceId,
+        type: 'ARTICLE',
+        title: '模型能力评测',
+        language: 'zh',
+        originalUrl: `https://example.com/${TAG}/ft-cn-title`,
+        pipelineStatus: 'INGESTED',
+      },
+    });
+
+    expect(await matchAgainst('模型')).toContain(content.id.toString());
+  });
+
+  it('中文词能命中 body_translated（Signal 正文是中文译文）', async () => {
+    const sourceId = await createSourceForFulltext();
+    const content = await prisma.content.create({
+      data: {
+        sourceId,
+        type: 'ARTICLE',
+        title: `${TAG} 无关标题`,
+        bodyTranslated: '这篇译文讨论推理成本与部署',
+        language: 'zh',
+        originalUrl: `https://example.com/${TAG}/ft-cn-body`,
+        pipelineStatus: 'INGESTED',
+      },
+    });
+
+    expect(await matchAgainst('推理成本')).toContain(content.id.toString());
+  });
+
+  it('中文词能命中 summary', async () => {
+    const sourceId = await createSourceForFulltext();
+    const content = await prisma.content.create({
+      data: {
+        sourceId,
+        type: 'ARTICLE',
+        title: `${TAG} 无关标题`,
+        summary: '关于开发者生态的摘要',
+        language: 'zh',
+        originalUrl: `https://example.com/${TAG}/ft-cn-summary`,
+        pipelineStatus: 'INGESTED',
+      },
+    });
+
+    expect(await matchAgainst('开发者生态')).toContain(content.id.toString());
+  });
+
+  it('英文检索在 ngram parser 下仍然可用', async () => {
+    const sourceId = await createSourceForFulltext();
+    const content = await prisma.content.create({
+      data: {
+        sourceId,
+        type: 'ARTICLE',
+        title: 'signalprobeunique latin probe',
+        language: 'en',
+        originalUrl: `https://example.com/${TAG}/ft-en`,
+        pipelineStatus: 'INGESTED',
+      },
+    });
+
+    expect(await matchAgainst('signalprobeunique')).toContain(content.id.toString());
   });
 });
 

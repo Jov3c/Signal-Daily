@@ -44,6 +44,31 @@ export type CreateLoggerOptions = {
  */
 const timestampFn = (): string => `,"timestamp":"${new Date().toISOString()}"`;
 
+/**
+ * 让 `.child()` 的 bindings 也经过脱敏。
+ *
+ * ⚠ 实测结论（pino 9）：`formatters.log` **看不到** child bindings，
+ * 而 `formatters.bindings` 只在创建时对 base bindings 生效一次。
+ * 因此裸用 pino 时 `logger.child({ password })` 会把明文直接落盘 ——
+ * 这是最容易被误用的 API，必须在这里兜住。
+ *
+ * 递归包装，保证任意层级的 child 都被处理。
+ */
+function withRedactingChild(logger: Logger): Logger {
+  const wrap = (target: Logger): Logger => {
+    const originalChild = target.child.bind(target);
+    target.child = ((bindings?: Record<string, unknown>, childOptions?: unknown) =>
+      wrap(
+        originalChild(
+          redactSecrets(bindings ?? {}) as Record<string, unknown>,
+          childOptions as never,
+        ),
+      )) as unknown as Logger['child'];
+    return target;
+  };
+  return wrap(logger);
+}
+
 export function createLogger(options: CreateLoggerOptions): Logger {
   const pinoOptions: LoggerOptions = {
     level: options.level ?? 'info',
@@ -52,12 +77,15 @@ export function createLogger(options: CreateLoggerOptions): Logger {
     timestamp: timestampFn,
     formatters: {
       level: (label) => ({ level: label }),
-      // 深度脱敏，覆盖任意嵌套的 secret 字段与连接串凭据。
+      // 深度脱敏，覆盖日志调用里的任意嵌套 secret 字段与连接串凭据。
+      // 注意：这里管不到 child() 的 bindings，那部分由 withRedactingChild 负责。
       log: (object) => redactSecrets(object) as Record<string, unknown>,
     },
   };
 
-  return options.destination ? pino(pinoOptions, options.destination) : pino(pinoOptions);
+  const logger = options.destination ? pino(pinoOptions, options.destination) : pino(pinoOptions);
+
+  return withRedactingChild(logger);
 }
 
 /** 绑定关联字段，返回 child logger。 */
