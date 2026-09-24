@@ -25,6 +25,7 @@ import {
   embeddedIpv4Of,
   isBlockedHostname,
   isBlockedIpAddress,
+  isBlockedIpv6,
   normalizeHostname,
   parseIpv6ToBytes,
   redactUrlForDisplay,
@@ -325,6 +326,52 @@ describe('IPv6 解析与内嵌 IPv4 解码（直接单测，不经由前缀表�
     const bytes = parseIpv6ToBytes('2606:4700:4700::1111');
     expect(bytes).not.toBeNull();
     expect(embeddedIpv4Of(bytes ?? [])).toBeNull();
+  });
+});
+
+/**
+ * 直接断言 `isBlockedIpv6` 的**白名单语义**。
+ *
+ * ★ 为什么必须单独测这一层：反证时把 `::1` 从 `2000::/3` 白名单里刻意放行，
+ * 所有端到端用例**依然全绿** —— 因为 `embeddedIpv4Of()` 又把 `::1` 解成内嵌的
+ * `0.0.0.1`（落在被阻止的 `0.0.0.0/8`）挡住了。
+ *
+ * 这是纵深防御在正常工作，**不是**缺陷；但它意味着白名单这条规则
+ * 自己没有独立的牙齿。少了下面这些断言，将来有人把白名单误删，
+ * 只有「恰好还能被内嵌判定兜住」的地址会报错，其余的会静默放行。
+ */
+describe('isBlockedIpv6 的白名单语义（不经由内嵌 IPv4 判定）', () => {
+  const blocked = (ip: string): boolean => {
+    const bytes = parseIpv6ToBytes(ip);
+    if (bytes === null) throw new Error(`解析失败：${ip}`);
+    return isBlockedIpv6(bytes);
+  };
+
+  it.each([
+    ['loopback `::1` —— 不在 2000::/3 内', '::1'],
+    ['未指定 `::`', '::'],
+    ['保留段 `0000::/8`', '::abcd'],
+    ['IPv4-mapped', '::ffff:127.0.0.1'],
+    ['NAT64', '64:ff9b::1'],
+    ['discard-only', '100::1'],
+    ['ULA', 'fd00::1'],
+    ['link-local', 'fe80::1'],
+    ['组播', 'ff02::1'],
+    ['2000::/3 之外的 `4000::1`', '4000::1'],
+    ['白名单内的 Teredo', '2001::1'],
+    ['白名单内的 6to4', '2002:7f00:1::'],
+    ['白名单内的文档段', '2001:db8::1'],
+    ['白名单内的基准测试段', '2001:2::1'],
+  ])('%s 被阻止', (_label, ip) => {
+    expect(blocked(ip)).toBe(true);
+  });
+
+  it.each([
+    ['Cloudflare DNS', '2606:4700:4700::1111'],
+    ['Google DNS', '2001:4860:4860::8888'],
+    ['3fff 边界（仍在 /3 内）', '3fff::1'],
+  ])('%s 放行', (_label, ip) => {
+    expect(blocked(ip)).toBe(false);
   });
 });
 
