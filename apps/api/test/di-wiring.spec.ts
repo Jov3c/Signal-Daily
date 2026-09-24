@@ -134,14 +134,46 @@ describe('构造参数必须显式声明 @Inject（防 emitDecoratorMetadata 退
     expect(files.length).toBeGreaterThan(10);
   });
 
-  it('类型别名集合非空（确认排除逻辑本身有效，而不是空集什么都不排）', () => {
+  it('类型别名排除逻辑本身有效（直接对 matcher 断言，不依赖别名恰好落在哪个目录）', () => {
+    // ── 这条用例的来历（2026-09-24，Agent 04）──────────────────────────
+    // 原先它断言的是「`UrlSafetyReason` / `SourceFetchFailureReason`
+    // 出现在 apps/api/src 里」。Agent 04 为让 `apps/worker` 能复用同一份
+    // SSRF 防护，把 `url-safety/` 按 CCR-agent-03 第 1 项提取到了
+    // `packages/source-core` —— 文件一搬走，这条断言就红了，
+    // 而**排除逻辑本身一直是好的**。
+    //
+    // 也就是说原来的写法验证的是「别名在哪」这个与守卫目的无关的事实。
+    // 现在改为在**内联源码**上直接验证 matcher：无论别名将来被搬到哪里，
+    // 这条守卫都仍然在证明「排除不是空集、不是什么都不排」。
+    const probe = declaredTypeAliases([
+      {
+        path: '/__probe__/aliases.ts',
+        relativePath: '__probe__/aliases.ts',
+        content: '',
+        code: [
+          "export type UrlSafetyReason = 'A' | 'B';",
+          'type SourceFetchFailureReason =',
+          "  | 'TIMEOUT'",
+          "  | 'NETWORK';",
+          'export interface SourceRepository {',
+          '  findById(id: string): Promise<unknown>;',
+          '}',
+          'export class AuthGuard {}',
+        ].join('\n'),
+      },
+    ]);
+
+    // 单行联合别名、跨行联合别名都必须被识别 ——
+    // 这两个正是历史上触发过误报的真实形状。
+    expect(probe.has('UrlSafetyReason')).toBe(true);
+    expect(probe.has('SourceFetchFailureReason')).toBe(true);
+    // 而真正的 DI 类型是类 / 接口，**不在**别名集合里，排除不会漏掉它们。
+    expect(probe.has('AuthGuard')).toBe(false);
+    expect(probe.has('SourceRepository')).toBe(false);
+  });
+
+  it('在真实 app 源码上确实扫描到了别名（防止扫描空跑）', () => {
     expect(typeAliases.size).toBeGreaterThan(5);
-    // 这两个正是触发过误报的别名。
-    expect(typeAliases.has('UrlSafetyReason')).toBe(true);
-    expect(typeAliases.has('SourceFetchFailureReason')).toBe(true);
-    // 而真正的 DI 类型是类 / 接口，不在别名集合里 —— 排除不会漏掉它们。
-    expect(typeAliases.has('AuthGuard')).toBe(false);
-    expect(typeAliases.has('SourceRepository')).toBe(false);
   });
 
   it('每个「类 / 接口类型」的构造参数都带 @Inject(...)', () => {
