@@ -45,9 +45,17 @@ export type SourceFetchFailureReason =
   | 'TIMEOUT'
   | 'NETWORK'
   | 'DNS_RESOLUTION_FAILED'
-  | 'HTTP_STATUS'
   | 'TOO_MANY_REDIRECTS'
-  | 'REDIRECT_WITHOUT_LOCATION';
+  | 'REDIRECT_WITHOUT_LOCATION'
+  /**
+   * 重定向的 `Location` 无法解析成 URL。
+   *
+   * ⚠ 这个成员是**独立审查发现后补上的**：原先 `new URL(location, current)`
+   * 没有兜住 `TypeError(ERR_INVALID_URL)`，一个远端返回的畸形 `Location`
+   * 就能让 `POST /:id/test` 变成 500 —— 直接击穿「探测失败也是 200 + {ok:false}」
+   * 这条契约。`Location` 是完全由对端控制的输入。
+   */
+  | 'INVALID_REDIRECT';
 
 /**
  * 取数失败。
@@ -59,7 +67,7 @@ export type SourceFetchFailureReason =
  */
 export class SourceFetchError extends Error {
   readonly reason: SourceFetchFailureReason;
-  /** 仅在 `HTTP_STATUS` 时有值。 */
+  /** 触发失败的那一跳的 HTTP 状态码（重定向类失败时有值）。 */
   readonly status: number | null;
 
   constructor(
@@ -115,6 +123,36 @@ export type SafeFetchResult = {
 export const DEFAULT_MAX_REDIRECTS = 5;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * **跨主机**重定向时必须丢弃的请求头。
+ *
+ * ── 为什么需要（独立审查发现）──────────────────────────────────────
+ * 逐跳重新校验解决了「目标是不是公网地址」，但没有解决
+ * 「**还是不是同一台主机**」。`X_USER` 与 `GITHUB_REPO` 的探测会带上真实的
+ * `X_API_BEARER_TOKEN` / `GITHUB_TOKEN`，而 `headers` 原样带到了每一跳 ——
+ * 只要任何一跳落在别的公网主机上，令牌就跟着走了。
+ *
+ * 实测（`work/_agent03/repro-cross-host-redirect.mjs`）：302 跳到
+ * 第三方主机时，第二个请求的 `authorization` 仍是完整的
+ * `Bearer SUPER_SECRET_TOKEN`。
+ *
+ * 可达性说明：目前只有两个**硬编码**的厂商端点会带头（`api.x.com` /
+ * `api.github.com`），管理员无法把目标改到别处，因此真实利用需要厂商端点
+ * 自己跨域跳转。但这是「公网 → 公网」维度上唯一没被校验的地方，
+ * 补上它几乎零成本。
+ */
+const SENSITIVE_HEADERS: readonly string[] = ['authorization', 'cookie', 'proxy-authorization'];
+
+/** 丢弃敏感头（大小写不敏感）。跨主机跳转时使用。 */
+export function stripSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (SENSITIVE_HEADERS.includes(name.toLowerCase())) continue;
+    kept[name] = value;
+  }
+  return kept;
+}
 
 /**
  * 解析 hostname 并确认**每一个**解析结果都是公网地址。
@@ -243,6 +281,8 @@ export async function safeFetchText(
 
   let method: 'GET' | 'HEAD' = request.method ?? 'GET';
   let current = assertSafeSourceUrl(rawUrl);
+  // 请求头是**逐跳可变**的：跨主机跳转时要丢掉敏感头（见 SENSITIVE_HEADERS）。
+  let headers: Record<string, string> = { ...(request.headers ?? {}) };
   const redirects: string[] = [];
 
   for (let hop = 0; ; hop += 1) {
@@ -259,7 +299,7 @@ export async function safeFetchText(
       response = await fetchImpl(current.toString(), {
         method,
         redirect: 'manual',
-        headers: request.headers ?? {},
+        headers,
         // 剩余预算给整个请求（含响应体读取）。
         signal: AbortSignal.timeout(remainingMs),
       });
@@ -291,10 +331,31 @@ export async function safeFetchText(
         );
       }
 
-      // ★ 重新校验下一跳：`new URL(location, current)` 先解析成绝对地址，
-      //   再走一遍完整的语法 + 主机校验。公网 → 内网的重定向在这里被挡下。
-      const next = new URL(location, current);
+      // ★ 重新校验下一跳：先解析成绝对地址，再走一遍完整的语法 + 主机校验。
+      //   公网 → 内网的重定向在这里被挡下。
+      //
+      // ⚠ 解析必须兜住 `TypeError(ERR_INVALID_URL)`：`Location` 是**对端完全可控**
+      //   的输入，一个畸形值（`http://[::1`、`https://%%%`、越界端口）会让
+      //   `new URL()` 抛错。不兜的话它会一路冒泡成 500，击穿
+      //   「探测失败也是 200 + {ok:false}」这条契约（独立审查实测 4/4 复现）。
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch (error) {
+        throw new SourceFetchError(
+          'INVALID_REDIRECT',
+          'Source redirected to an unparseable URL',
+          { status: response.status, cause: error },
+        );
+      }
+
       const validated = assertSafeSourceUrl(next.toString());
+
+      // ★ 跨主机跳转必须丢掉敏感头 —— 否则 X / GitHub 的令牌会跟着跳到第三方。
+      if (validated.origin !== current.origin) {
+        headers = stripSensitiveHeaders(headers);
+      }
+
       redirects.push(redactUrlForDisplay(validated));
       current = validated;
       // 303 语义上等价于「去 GET 那个地址」。

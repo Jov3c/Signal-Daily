@@ -80,4 +80,5 @@ export {
   decodeChunks,
   defaultDnsLookup,
   safeFetchText,
+  stripSensitiveHeaders,
 } from './safe-fetch';

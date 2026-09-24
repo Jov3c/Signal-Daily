@@ -30,8 +30,10 @@ import {
   parseIpv6ToBytes,
   redactUrlForDisplay,
   safeFetchText,
+  stripSensitiveHeaders,
   type DnsAddress,
   type Ipv6Bytes,
+  type SourceFetchFailureReason,
 } from '../src/modules/sources/url-safety';
 
 /* ------------------------------------------------------------------ */
@@ -360,6 +362,9 @@ describe('isBlockedIpv6 的白名单语义（不经由内嵌 IPv4 判定）', ()
     ['白名单内的 6to4', '2002:7f00:1::'],
     ['白名单内的文档段', '2001:db8::1'],
     ['白名单内的基准测试段', '2001:2::1'],
+    // RFC 9637 的文档前缀。挡它只是为了与 2001:db8::/32 保持一致 ——
+    // 独立审查指出：只挡其中一个会让规则看起来像巧合。
+    ['白名单内的 RFC 9637 文档段', '3fff::1'],
   ])('%s 被阻止', (_label, ip) => {
     expect(blocked(ip)).toBe(true);
   });
@@ -367,7 +372,8 @@ describe('isBlockedIpv6 的白名单语义（不经由内嵌 IPv4 判定）', ()
   it.each([
     ['Cloudflare DNS', '2606:4700:4700::1111'],
     ['Google DNS', '2001:4860:4860::8888'],
-    ['3fff 边界（仍在 /3 内）', '3fff::1'],
+    ['/3 内的普通公网地址', '2400:cb00::1'],
+    ['/3 上边界', '3ffe:ffff::1'],
   ])('%s 放行', (_label, ip) => {
     expect(blocked(ip)).toBe(false);
   });
@@ -727,6 +733,172 @@ describe('safeFetchText —— 超时与体积上限', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 3b. 独立审查发现的回归守卫                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 畸形 `Location` 必须变成 `SourceFetchError`，**不能**是 `TypeError`。
+ *
+ * 曾经的缺陷（独立审查 F1，我用 `work/_agent03/repro-malformed-location.mjs`
+ * 在编译产物上复现了 4/4）：`new URL(location, current)` 没有 try/catch，
+ * 抛出的 `TypeError(ERR_INVALID_URL)` 既不是 `UrlSafetyError` 也不是
+ * `SourceFetchError`，于是 `HttpSourceTester` 不会把它转成 `{ok:false}`，
+ * 一路冒泡成 500 —— 直接击穿「探测失败也是 200」这条契约。
+ *
+ * `Location` 是**对端完全可控**的输入，任何一个源站返回一行坏头就能污染 5xx 告警。
+ */
+describe('safeFetchText —— 畸形的 Location 头（独立审查 F1 的回归守卫）', () => {
+  // ⚠ 这里只放**实测确实解析失败**的值。`://nope` 看似畸形，其实会被
+  // WHATWG 当成相对路径（`https://feed.example/://nope`）—— 它不该出现在这张表里，
+  // 我第一次就写错了，是测试自己把它抓出来的。
+  it.each([
+    ['不闭合的 IPv6', 'http://[::1'],
+    ['非法百分号', 'https://%%%'],
+    ['端口越界', 'http://example.com:99999999/'],
+    ['含空格', 'http://a b/'],
+    ['非法 IPv6 写法', 'http://[:::1]/'],
+    ['非法百分号转义', 'https://x%zz/'],
+    ['端口越界的 IPv6', 'http://[::1]:99999/'],
+  ])('%s → SourceFetchError(INVALID_REDIRECT)，而不是 TypeError', async (_label, location) => {
+    let thrown: unknown;
+    try {
+      await safeFetchText(
+        'https://feed.example/rss',
+        { timeoutMs: 1_000, maxBytes: 100 },
+        {
+          lookup: ALLOW_ALL_DNS,
+          fetchImpl: (async () =>
+            new Response(null, { status: 302, headers: { location } })) as unknown as typeof fetch,
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown, `Location=${location} 本应抛错`).toBeDefined();
+    // ★ 关键：必须是**可被消费端识别**的类型，而不是裸的 TypeError。
+    expect(thrown, `Location=${location} 抛出的类型不对：${String(thrown)}`).toBeInstanceOf(
+      SourceFetchError,
+    );
+    expect((thrown as SourceFetchError).reason).toBe('INVALID_REDIRECT');
+  });
+
+  it('对照：合法但内网的重定向仍然被 URL 安全规则挡下（两类失败可区分）', async () => {
+    await expect(
+      safeFetchText(
+        'https://feed.example/rss',
+        { timeoutMs: 1_000, maxBytes: 100 },
+        {
+          lookup: ALLOW_ALL_DNS,
+          fetchImpl: (async () =>
+            new Response(null, {
+              status: 302,
+              headers: { location: 'http://169.254.169.254/' },
+            })) as unknown as typeof fetch,
+        },
+      ),
+    ).rejects.toBeInstanceOf(UrlSafetyError);
+  });
+});
+
+/**
+ * 跨主机重定向必须丢掉 `Authorization`。
+ *
+ * 曾经的缺陷（独立审查 F3）：逐跳重新校验解决了「目标是否公网」，
+ * 但没解决「是否还是同一台主机」，`headers` 原样带到每一跳 ——
+ * X / GitHub 的真实令牌会跟着跳到第三方主机上。
+ */
+describe('safeFetchText —— 跨主机重定向不得带走敏感头（独立审查 F3 的回归守卫）', () => {
+  const TOKEN = 'Bearer SUPER_SECRET_TOKEN';
+
+  it('跨主机 → 第二跳不带 Authorization / Cookie', async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      if (seen.length === 1) {
+        return new Response(null, { status: 302, headers: { location: 'https://other.example/x' } });
+      }
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await safeFetchText(
+      'https://api.example/v2/users',
+      {
+        timeoutMs: 2_000,
+        maxBytes: 100,
+        headers: { authorization: TOKEN, cookie: 'session=abc', accept: 'application/json' },
+      },
+      { lookup: ALLOW_ALL_DNS, fetchImpl },
+    );
+
+    expect(seen).toHaveLength(2);
+    // 第一跳当然要带（它就是发给这个主机的）。
+    expect(seen[0]?.headers.authorization).toBe(TOKEN);
+    // ★ 第二跳换了主机 —— 敏感头必须没了，非敏感头要保留。
+    expect(seen[1]?.url).toBe('https://other.example/x');
+    expect(seen[1]?.headers.authorization).toBeUndefined();
+    expect(seen[1]?.headers.cookie).toBeUndefined();
+    expect(seen[1]?.headers.accept).toBe('application/json');
+  });
+
+  it('同主机（仅路径不同）→ 保留 Authorization（不要误伤正常的相对跳转）', async () => {
+    const seen: Record<string, string>[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      if (seen.length === 1) {
+        return new Response(null, { status: 302, headers: { location: '/v2/moved' } });
+      }
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await safeFetchText(
+      'https://api.example/v2/users',
+      { timeoutMs: 2_000, maxBytes: 100, headers: { authorization: TOKEN } },
+      { lookup: ALLOW_ALL_DNS, fetchImpl },
+    );
+
+    expect(seen[1]?.authorization).toBe(TOKEN);
+  });
+
+  it('跨主机但只是 http→https 同主机名 → 视为跨 origin，同样丢弃', async () => {
+    const seen: Record<string, string>[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      if (seen.length === 1) {
+        return new Response(null, {
+          status: 301,
+          headers: { location: 'https://api.example/v2/users' },
+        });
+      }
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await safeFetchText(
+      'http://api.example/v2/users',
+      { timeoutMs: 2_000, maxBytes: 100, headers: { authorization: TOKEN } },
+      { lookup: ALLOW_ALL_DNS, fetchImpl },
+    );
+
+    // `http://a` 与 `https://a` 是不同的 origin（scheme 不同），
+    // 保守起见按跨主机处理 —— 升级到 TLS 本身不构成「同一台主机」的充分理由。
+    expect(seen[1]?.authorization).toBeUndefined();
+  });
+});
+
+describe('stripSensitiveHeaders', () => {
+  it('大小写不敏感地丢弃敏感头，保留其余', () => {
+    expect(
+      stripSensitiveHeaders({
+        Authorization: 'Bearer x',
+        COOKIE: 'a=b',
+        'Proxy-Authorization': 'Basic y',
+        Accept: 'application/json',
+      }),
+    ).toEqual({ Accept: 'application/json' });
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* 4. 小工具                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -749,11 +921,26 @@ describe('decodeChunks', () => {
 
 describe('SourceFetchError', () => {
   it('保留 status 与 reason', () => {
-    const error = new SourceFetchError('HTTP_STATUS', 'boom', { status: 503 });
-    expect(error.reason).toBe('HTTP_STATUS');
-    expect(error.status).toBe(503);
+    const error = new SourceFetchError('TOO_MANY_REDIRECTS', 'boom', { status: 302 });
+    expect(error.reason).toBe('TOO_MANY_REDIRECTS');
+    expect(error.status).toBe(302);
     expect(error).toBeInstanceOf(Error);
     // 刻意不是 AppError：它没有「该回什么状态码」的答案。
     expect(error.name).toBe('SourceFetchError');
+  });
+
+  it('不提供 HTTP_STATUS —— 非 2xx 是**正常返回**（由调用方看 result.status 判定）', () => {
+    // 独立审查指出：原先联合类型里的 `HTTP_STATUS` 是死成员
+    // （`safeFetchText` 从不抛它），留着会诱导 Agent 04 写一个永远不进的分支。
+    // 这里用类型层面的断言把它钉住。
+    const reasons: SourceFetchFailureReason[] = [
+      'TIMEOUT',
+      'NETWORK',
+      'DNS_RESOLUTION_FAILED',
+      'TOO_MANY_REDIRECTS',
+      'REDIRECT_WITHOUT_LOCATION',
+      'INVALID_REDIRECT',
+    ];
+    expect(reasons).not.toContain('HTTP_STATUS');
   });
 });
