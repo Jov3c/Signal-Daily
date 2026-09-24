@@ -2,33 +2,47 @@
   "$comment": "apps/api/test 的类型检查 + 打包器配置。测试文件不在 apps/api/tsconfig.json 的 include 里（Agent 00 HANDOFF Known Limitations 第 3 条：避免污染 dist），于是 tsc -b 从不检查它们 —— 独立审查实测：测试里已经存在 3 个真实类型错误而所有人都看不到。现在由 pnpm --filter @signal/api typecheck 显式检查这一份。同时它也是 oxc/vitest 的 tsconfig 发现目标：没有这两个装饰器开关，测试里写 @Controller / @UseGuards 会报 'Decorators are not valid here'。刻意不 extends 根配置：oxc 解析 extends 的相对路径会以仓库根为基准，反而找不到文件。",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "types": ["node"],
-
+    "types": [
+      "node"
+    ],
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "useUnknownInCatchVariables": true,
-
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noEmit": true,
-
     "paths": {
-      "@signal/contracts": ["../../../packages/contracts/src/index.ts"],
-      "@signal/config": ["../../../packages/config/src/index.ts"],
-      "@signal/logger": ["../../../packages/logger/src/index.ts"],
-      "@signal/test-utils": ["../../../packages/test-utils/src/index.ts"]
+      "@signal/contracts": [
+        "../../../packages/contracts/src/index.ts"
+      ],
+      "@signal/config": [
+        "../../../packages/config/src/index.ts"
+      ],
+      "@signal/logger": [
+        "../../../packages/logger/src/index.ts"
+      ],
+      "@signal/test-utils": [
+        "../../../packages/test-utils/src/index.ts"
+      ],
+      "@signal/source-core": [
+        "../../../packages/source-core/src/index.ts"
+      ]
     }
   },
-  "include": ["**/*.ts", "**/*.mts"]
+  "include": [
+    "**/*.ts",
+    "**/*.mts"
+  ]
 }

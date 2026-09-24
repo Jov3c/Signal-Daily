@@ -7,13 +7,29 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts", "src/**/__tests__/**"],
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.spec.ts",
+    "src/**/__tests__/**"
+  ],
   "references": [
-    { "path": "../../packages/contracts" },
-    { "path": "../../packages/config" },
-    { "path": "../../packages/logger" }
+    {
+      "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/config"
+    },
+    {
+      "path": "../../packages/logger"
+    },
+    {
+      "path": "../../packages/source-core"
+    }
   ]
 }

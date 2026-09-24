@@ -1,0 +1,24 @@
+{
+  "name": "@signal/source-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Signal 信源采集内核：SSRF 防护、调度到期规则、各 SourceType 的 config 契约。API 与 Worker 共用同一份，禁止任何一方另写实现。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@signal/contracts": "workspace:*"
+  }
+}

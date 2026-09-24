@@ -20,6 +20,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@signal/contracts': fromRoot('../../packages/contracts/src/index.ts'),
+      '@signal/source-core': fromRoot('../../packages/source-core/src/index.ts'),
       '@signal/config': fromRoot('../../packages/config/src/index.ts'),
       '@signal/logger': fromRoot('../../packages/logger/src/index.ts'),
       '@signal/test-utils': fromRoot('../../packages/test-utils/src/index.ts'),

@@ -1,12 +1,29 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/contracts" },
-    { "path": "packages/config" },
-    { "path": "packages/logger" },
-    { "path": "packages/test-utils" },
-    { "path": "prisma" },
-    { "path": "apps/api" },
-    { "path": "apps/worker" }
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/config"
+    },
+    {
+      "path": "packages/logger"
+    },
+    {
+      "path": "packages/test-utils"
+    },
+    {
+      "path": "packages/source-core"
+    },
+    {
+      "path": "prisma"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/worker"
+    }
   ]
 }
