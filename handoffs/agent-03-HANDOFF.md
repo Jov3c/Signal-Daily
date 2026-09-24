@@ -34,27 +34,27 @@
 
 ### 1. Admin Source Registry —— 8 条路由，逐字等于 `docs/04`
 
-| 方法   | 路径                             | 状态码                       |
-| ------ | -------------------------------- | ---------------------------- |
-| GET    | `/api/v1/admin/sources`          | 200（`OffsetEnvelope` 分页） |
-| POST   | `/api/v1/admin/sources`          | **201**                      |
-| GET    | `/api/v1/admin/sources/:id`      | 200                          |
-| PATCH  | `/api/v1/admin/sources/:id`      | 200                          |
-| POST   | `/api/v1/admin/sources/:id/enable`   | 200（幂等）              |
-| POST   | `/api/v1/admin/sources/:id/disable`  | 200（幂等）              |
-| POST   | `/api/v1/admin/sources/:id/test`     | **200**（成功与失败都是 200） |
-| POST   | `/api/v1/admin/sources/:id/fetch-now` | **202**                 |
+| 方法  | 路径                                  | 状态码                        |
+| ----- | ------------------------------------- | ----------------------------- |
+| GET   | `/api/v1/admin/sources`               | 200（`OffsetEnvelope` 分页）  |
+| POST  | `/api/v1/admin/sources`               | **201**                       |
+| GET   | `/api/v1/admin/sources/:id`           | 200                           |
+| PATCH | `/api/v1/admin/sources/:id`           | 200                           |
+| POST  | `/api/v1/admin/sources/:id/enable`    | 200（幂等）                   |
+| POST  | `/api/v1/admin/sources/:id/disable`   | 200（幂等）                   |
+| POST  | `/api/v1/admin/sources/:id/test`      | **200**（成功与失败都是 200） |
+| POST  | `/api/v1/admin/sources/:id/fetch-now` | **202**                       |
 
 `docs/04` 里**没有 DELETE**，所以「增删改查」不含删除 —— 这是对的，不是漏做。
 `docs/09` 要求的「X 账号 Filter/Tab」就是 `GET /admin/sources?type=X_USER`，不需要新端点。
 
 ### 2. SSRF 防护（三层，`url-safety/`）—— 本模块最重要的产物
 
-| 层 | 文件 | 做什么 |
-| --- | --- | --- |
+| 层     | 文件            | 做什么                                                                        |
+| ------ | --------------- | ----------------------------------------------------------------------------- |
 | ① 语法 | `url-safety.ts` | 只允许 http(s)；拒绝 URL 内嵌凭据与端口 0；把**归一化后**的 hostname 判黑名单 |
-| ② IP | `ip.ts` | IPv4 各类伪装写法；IPv6 用 **`2000::/3` 白名单**而不是枚举坏前缀 |
-| ③ 取数 | `safe-fetch.ts` | **DNS 全地址校验** + **逐跳重定向再校验** + 超时/体积上限（流式边读边停） |
+| ② IP   | `ip.ts`         | IPv4 各类伪装写法；IPv6 用 **`2000::/3` 白名单**而不是枚举坏前缀              |
+| ③ 取数 | `safe-fetch.ts` | **DNS 全地址校验** + **逐跳重定向再校验** + 超时/体积上限（流式边读边停）     |
 
 判定依据全部来自**实测**而非假设（`work/_agent03/probe-url-normalization.mjs`）：
 
@@ -173,18 +173,18 @@ pnpm-lock.yaml                         依赖锁定
 ```ts
 // ① SSRF / URL 安全（零依赖：只用 node:* 与 @signal/contracts）
 import {
-  assertSafeSourceUrl,            // 写库时：同步、不联网
-  safeFetchText,                  // 抓取时：DNS 校验 + 逐跳重定向再校验 + 超时/体积上限
+  assertSafeSourceUrl, // 写库时：同步、不联网
+  safeFetchText, // 抓取时：DNS 校验 + 逐跳重定向再校验 + 超时/体积上限
   assertHostResolvesToPublicAddress,
   stripSensitiveHeaders,
-  UrlSafetyError,                 // 「这个地址永远不该被请求」
-  SourceFetchError,               // 「请求了但没成功」（可重试）
+  UrlSafetyError, // 「这个地址永远不该被请求」
+  SourceFetchError, // 「请求了但没成功」（可重试）
   redactUrlForDisplay,
-} from '../sources/url-safety';   // ← 从 apps/worker 看是跨 app，见下
+} from '../sources/url-safety'; // ← 从 apps/worker 看是跨 app，见下
 
 // ② 调度规则（零依赖）
 import {
-  buildDueSourcesWhere,           // 直接喂给 Prisma 的 where
+  buildDueSourcesWhere, // 直接喂给 Prisma 的 where
   DUE_SOURCES_ORDER_BY,
   computeNextFetchAt,
   DUE_SOURCES_BATCH_SIZE,
@@ -217,13 +217,13 @@ import {
 
 ### 本模块对外的错误码（4 个新增，全部无同义冲突）
 
-| 码 | HTTP | 何时 |
-| --- | --- | --- |
-| `SOURCE_NOT_FOUND` | 404 | （Agent 00 预置）id 不存在**或畸形或超出可绑定范围** |
-| `SOURCE_DUPLICATE_SLUG` | 409 | slug 撞车 |
-| `SOURCE_URL_NOT_ALLOWED` | 400 | URL 被 SSRF 规则拒绝（`details.reason` 给出具体原因） |
-| `SOURCE_CONFIG_INVALID` | 400 | 该类型的 config 校验失败（`details.fields` 列出字段） |
-| `SOURCE_ENQUEUE_FAILED` | 503 | 入队失败（Redis 不可用）—— **Agent 11 看到它去查 Redis** |
+| 码                       | HTTP | 何时                                                     |
+| ------------------------ | ---- | -------------------------------------------------------- |
+| `SOURCE_NOT_FOUND`       | 404  | （Agent 00 预置）id 不存在**或畸形或超出可绑定范围**     |
+| `SOURCE_DUPLICATE_SLUG`  | 409  | slug 撞车                                                |
+| `SOURCE_URL_NOT_ALLOWED` | 400  | URL 被 SSRF 规则拒绝（`details.reason` 给出具体原因）    |
+| `SOURCE_CONFIG_INVALID`  | 400  | 该类型的 config 校验失败（`details.fields` 列出字段）    |
+| `SOURCE_ENQUEUE_FAILED`  | 503  | 入队失败（Redis 不可用）—— **Agent 11 看到它去查 Redis** |
 
 `VALIDATION_FAILED`（平台码）负责**通用字段**（name / slug / tier / 数值范围 / 未知键），
 上面两个 `SOURCE_*_INVALID` 负责 `config`。这个分工是刻意的：
@@ -274,15 +274,15 @@ import {
 
 ## Tests
 
-| 文件 | 项数 | 覆盖 |
-| --- | --- | --- |
-| `sources-url-safety.spec.ts` | 149 | 伪装 IP、域名、scheme、凭据、端口；DNS 全地址校验；逐跳重定向再校验；**流式边读边停**；GBK 解码；跨主机丢敏感头；畸形 Location |
-| `sources-api.spec.ts` | 67 | **真实链路**（真 HTTP → 真 AdminGuard → 真 JWT → 真会话 → 真控制器 → 真错误过滤器）：401/403/撤权即时生效、路由面精确等于 8 条、CRUD、409、私网 URL、config 校验、启停幂等、due 语义、test/fetch-now、Origin 校验、P2002 兜底 |
-| `sources-config.spec.ts` | 46 | 六种类型的 config 校验（真实代码，不经 HTTP）：必填、取值范围、未知键、别名提升、seed 标记继承 |
-| `sources-tester.spec.ts` | 32 | **真实 `HttpSourceTester`** + stub 掉的 fetch/DNS：URL 拼法、状态码判定、feed 识别、GBK、X 令牌缺失不发请求、重定向到内网、target 去查询串 |
-| `sources-scheduling.spec.ts` | 25 | 到期规则对象、幂等窗口、JobId 格式、Redis 连接参数（含 `rediss:` → tls） |
-| `sources-db.integration.spec.ts` | 19 | **真 MySQL**：停用即不到期、NULL 算到期、BIGINT/DECIMAL/Json 形态、**BIGINT 上界**、**并发同 slug**、**真 SQL 的 q/enabled/分页**、与 seed 数据共处 |
-| `sources-queue.integration.spec.ts` | 6 | **真 Redis + BullMQ**：任务真的进队列、载荷/重试策略、JobId 幂等、Redis 不可用 503（含可用 Redis 的对照组） |
+| 文件                                | 项数 | 覆盖                                                                                                                                                                                                                          |
+| ----------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sources-url-safety.spec.ts`        | 149  | 伪装 IP、域名、scheme、凭据、端口；DNS 全地址校验；逐跳重定向再校验；**流式边读边停**；GBK 解码；跨主机丢敏感头；畸形 Location                                                                                                |
+| `sources-api.spec.ts`               | 67   | **真实链路**（真 HTTP → 真 AdminGuard → 真 JWT → 真会话 → 真控制器 → 真错误过滤器）：401/403/撤权即时生效、路由面精确等于 8 条、CRUD、409、私网 URL、config 校验、启停幂等、due 语义、test/fetch-now、Origin 校验、P2002 兜底 |
+| `sources-config.spec.ts`            | 46   | 六种类型的 config 校验（真实代码，不经 HTTP）：必填、取值范围、未知键、别名提升、seed 标记继承                                                                                                                                |
+| `sources-tester.spec.ts`            | 32   | **真实 `HttpSourceTester`** + stub 掉的 fetch/DNS：URL 拼法、状态码判定、feed 识别、GBK、X 令牌缺失不发请求、重定向到内网、target 去查询串                                                                                    |
+| `sources-scheduling.spec.ts`        | 25   | 到期规则对象、幂等窗口、JobId 格式、Redis 连接参数（含 `rediss:` → tls）                                                                                                                                                      |
+| `sources-db.integration.spec.ts`    | 19   | **真 MySQL**：停用即不到期、NULL 算到期、BIGINT/DECIMAL/Json 形态、**BIGINT 上界**、**并发同 slug**、**真 SQL 的 q/enabled/分页**、与 seed 数据共处                                                                           |
+| `sources-queue.integration.spec.ts` | 6    | **真 Redis + BullMQ**：任务真的进队列、载荷/重试策略、JobId 幂等、Redis 不可用 503（含可用 Redis 的对照组）                                                                                                                   |
 
 **测试数据刻意对齐真实形态**（§23.3）：中文 config 与 emoji 走真库（utf8mb4）、
 **GBK 字节**断言解码出「中文」、`Math.random()` 拼 slug 的坑已记录在测试注释里、
@@ -477,19 +477,19 @@ python ../work/_agent03/repro-bigint-bound.mjs                 # 审查发现的
 
 ## 1. 原先过于乐观的声称（逐条更正）
 
-| 正文/代码里的声称 | 事实 |
-| --- | --- |
-| 「`test` 成功与失败都返回 200 —— 只有来源不存在才是 404」 | **假**。畸形的 `Location` 头会让 `new URL()` 抛 `TypeError`，它不是 `UrlSafetyError`/`SourceFetchError`，于是**逃出** tester 的 catch，变成 **500**。而 `Location` 是**对端完全可控**的输入。**F1 / P2** |
-| 「逐跳重新校验重定向」 | **不完整**。校验了「目标是不是公网」，没校验「**还是不是同一台主机**」—— `X_API_BEARER_TOKEN` / `GITHUB_TOKEN` 原样带到每一跳，实测跳到第三方时 `authorization` 仍是完整的 `Bearer SUPER_SECRET_TOKEN`。**F3 / P3** |
+| 正文/代码里的声称                                                    | 事实                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 「`test` 成功与失败都返回 200 —— 只有来源不存在才是 404」            | **假**。畸形的 `Location` 头会让 `new URL()` 抛 `TypeError`，它不是 `UrlSafetyError`/`SourceFetchError`，于是**逃出** tester 的 catch，变成 **500**。而 `Location` 是**对端完全可控**的输入。**F1 / P2**               |
+| 「逐跳重新校验重定向」                                               | **不完整**。校验了「目标是不是公网」，没校验「**还是不是同一台主机**」—— `X_API_BEARER_TOKEN` / `GITHUB_TOKEN` 原样带到每一跳，实测跳到第三方时 `authorization` 仍是完整的 `Bearer SUPER_SECRET_TOKEN`。**F3 / P3**    |
 | 「`config: null` 是有意义的（清空 config）」（`repository.ts` 注释） | **假**。实现把 `null` 当「空对象 → 全部走默认值」，于是「清空」被执行成「**静默重置成默认值**」：管理员设的 `maxItems=250` 被悄悄改回 50，返回 200；而对 `X_USER` 同一操作是 400。**注释与实现不符本身就是缺陷。P3-1** |
-| 「`enable` / `disable` 的幂等与 nextFetchAt 语义」 | **只对专用端点成立**。`PATCH {enabled:true}` 是**另一条合法的启用路径**，它**不**推进 `next_fetch_at` —— 界面显示「已启用」，调度器却可能一周不碰它。正是本模块自己要防的那类不一致。**P2-1** |
-| 「局部 config 的 PATCH 不会破坏已有配置」 | **假**。`copyPassthrough` 只从**请求体**取 seed 标记，于是「只改 handle」的 PATCH 会把 `seed`/`seedNote` **静默抹掉** —— 而那是区分 seed 演示数据与真实数据的唯一标记。**P3-2** |
-| 「`slug` 唯一索引真的生效，且被翻译成 409 而不是 500」（用例名） | **后半句证明不了**。顺序请求永远先命中服务层预检，**P2002 兜底分支在任何测试里都没被执行过**（反证：单独关掉它依然全绿）。**P3-3** |
-| 「`list()` 的过滤与分页」 | 单元测试里那几个过滤是**替身自己实现的**，真实现（真 SQL 的 `q` / `enabled` / `skip`）**从未被执行过**（反证：分别改坏 → 全部 GREEN）。**P3-4** |
-| 「`id` 边界已验过（畸形 id 是 404 不是 500）」 | **只验了字母 id**。数字上界没验：连**合法上限** `18446744073709551615` 都会让 Prisma 抛错 → **500**。内存替身复刻不了这件事。**F2** |
-| 「字符串长度上限与列宽一致」 | **不完全**。用 JS `.length`（UTF-16 码元）而 MySQL `VARCHAR(255)` 按**字符**计 —— 128 个 emoji 被误判为 256 而拒。**P4-1** |
-| 「未知键会被拒绝」 | **只对 `config` 成立**。顶层 `tierr` 拼错返回 200 而什么都没改 —— 与「`includQuotes` 必须报错」是**完全相同的论证**，但顶层没做。**P4-2** |
-| 「我加了一条有牙齿的守卫」（`auth-contract` 的 admin 路由围栏） | **同义反复**。那条 `it(...)` 只对字符串数组调了一次 `filter`，**连正则都没碰到**。审查者指出后改为真正跑同一套过滤，并把正则的已知缺口显式钉住。**P4-5** |
+| 「`enable` / `disable` 的幂等与 nextFetchAt 语义」                   | **只对专用端点成立**。`PATCH {enabled:true}` 是**另一条合法的启用路径**，它**不**推进 `next_fetch_at` —— 界面显示「已启用」，调度器却可能一周不碰它。正是本模块自己要防的那类不一致。**P2-1**                          |
+| 「局部 config 的 PATCH 不会破坏已有配置」                            | **假**。`copyPassthrough` 只从**请求体**取 seed 标记，于是「只改 handle」的 PATCH 会把 `seed`/`seedNote` **静默抹掉** —— 而那是区分 seed 演示数据与真实数据的唯一标记。**P3-2**                                        |
+| 「`slug` 唯一索引真的生效，且被翻译成 409 而不是 500」（用例名）     | **后半句证明不了**。顺序请求永远先命中服务层预检，**P2002 兜底分支在任何测试里都没被执行过**（反证：单独关掉它依然全绿）。**P3-3**                                                                                     |
+| 「`list()` 的过滤与分页」                                            | 单元测试里那几个过滤是**替身自己实现的**，真实现（真 SQL 的 `q` / `enabled` / `skip`）**从未被执行过**（反证：分别改坏 → 全部 GREEN）。**P3-4**                                                                        |
+| 「`id` 边界已验过（畸形 id 是 404 不是 500）」                       | **只验了字母 id**。数字上界没验：连**合法上限** `18446744073709551615` 都会让 Prisma 抛错 → **500**。内存替身复刻不了这件事。**F2**                                                                                    |
+| 「字符串长度上限与列宽一致」                                         | **不完全**。用 JS `.length`（UTF-16 码元）而 MySQL `VARCHAR(255)` 按**字符**计 —— 128 个 emoji 被误判为 256 而拒。**P4-1**                                                                                             |
+| 「未知键会被拒绝」                                                   | **只对 `config` 成立**。顶层 `tierr` 拼错返回 200 而什么都没改 —— 与「`includQuotes` 必须报错」是**完全相同的论证**，但顶层没做。**P4-2**                                                                              |
+| 「我加了一条有牙齿的守卫」（`auth-contract` 的 admin 路由围栏）      | **同义反复**。那条 `it(...)` 只对字符串数组调了一次 `filter`，**连正则都没碰到**。审查者指出后改为真正跑同一套过滤，并把正则的已知缺口显式钉住。**P4-5**                                                               |
 
 **审查确认「没问题」的项**（附证据）：SSRF 语法层 130 条绕过尝试 0 条成功（含十进制 /
 十六进制 / 八进制 / 短写 / 全角 / 带圈字符 / 百分号编码 / zone id）；
@@ -502,21 +502,21 @@ dist 产物里 DI 完好；错误封套不回显输入值；探针结束后库�
 
 ## 2. 修复内容与影响范围
 
-| # | 修复 |
-| --- | --- |
-| **F1** | 重定向解析包 try/catch → `SourceFetchError('INVALID_REDIRECT')`；联合类型补该成员；**顺带移除死成员 `HTTP_STATUS`**（`safeFetchText` 从不抛它，留着会诱导 Agent 04 写一个永远不进的分支） |
-| **F3** | 跨 origin 重定向时丢弃 `authorization` / `cookie` / `proxy-authorization`；**同 origin 的相对跳转不受影响**（有对照用例） |
-| **F2** | 本模块边界加 `MAX_BINDABLE_ID`（Int64 max）+ `toSourceId()`；超界当作「不存在」→ 404 |
-| **P2-1** | `PATCH` 的 `enabled` 走与 `/enable` 相同的状态跃迁（仅「停用→启用」推进，且幂等） |
-| **P3-1** | `config: null` **明确拒绝**（400）+ 修正 `repository.ts` 里与实现不符的注释 |
-| **P3-2** | `copyPassthrough` 从**已有 config** 继承 seed 标记（请求体优先） |
-| **P3-3** | 补竞态用例（预检通过、插入撞唯一约束）+ 真库并发用例（4 并发 → 1×201 / 3×409 / 无 5xx） |
-| **P3-4** | 补 4 条真库用例：**中文** `q` 命中（+ 对照 0 条）、`q` 命中 slug、`enabled` 过滤、`page=2/3` 的 skip/offset 不重叠不重不漏 |
-| **P4-1** | 长度改按**码点**计（`[...value].length`） |
-| **P4-2** | 顶层未知键 → 400；`PATCH {name:null}` / `{slug:null}` → 400（不再静默 no-op） |
-| **P4-5** | 把 admin 路由围栏的判定抽成函数，反证改为**真正跑同一套过滤**；正则的已知缺口写进测试 |
-| **新增** | **Admin Origin 校验**（`docs/14` 的 CSRF 部分，Agent 02 交接时留给 03/07/12） |
-| **新增** | `scheduling.ts` 补三条给 Agent 04 的硬警告（`NOW()` 时区陷阱 / 与 `docs/06` 分叉 / 索引形态） |
+| #        | 修复                                                                                                                                                                                      |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **F1**   | 重定向解析包 try/catch → `SourceFetchError('INVALID_REDIRECT')`；联合类型补该成员；**顺带移除死成员 `HTTP_STATUS`**（`safeFetchText` 从不抛它，留着会诱导 Agent 04 写一个永远不进的分支） |
+| **F3**   | 跨 origin 重定向时丢弃 `authorization` / `cookie` / `proxy-authorization`；**同 origin 的相对跳转不受影响**（有对照用例）                                                                 |
+| **F2**   | 本模块边界加 `MAX_BINDABLE_ID`（Int64 max）+ `toSourceId()`；超界当作「不存在」→ 404                                                                                                      |
+| **P2-1** | `PATCH` 的 `enabled` 走与 `/enable` 相同的状态跃迁（仅「停用→启用」推进，且幂等）                                                                                                         |
+| **P3-1** | `config: null` **明确拒绝**（400）+ 修正 `repository.ts` 里与实现不符的注释                                                                                                               |
+| **P3-2** | `copyPassthrough` 从**已有 config** 继承 seed 标记（请求体优先）                                                                                                                          |
+| **P3-3** | 补竞态用例（预检通过、插入撞唯一约束）+ 真库并发用例（4 并发 → 1×201 / 3×409 / 无 5xx）                                                                                                   |
+| **P3-4** | 补 4 条真库用例：**中文** `q` 命中（+ 对照 0 条）、`q` 命中 slug、`enabled` 过滤、`page=2/3` 的 skip/offset 不重叠不重不漏                                                                |
+| **P4-1** | 长度改按**码点**计（`[...value].length`）                                                                                                                                                 |
+| **P4-2** | 顶层未知键 → 400；`PATCH {name:null}` / `{slug:null}` → 400（不再静默 no-op）                                                                                                             |
+| **P4-5** | 把 admin 路由围栏的判定抽成函数，反证改为**真正跑同一套过滤**；正则的已知缺口写进测试                                                                                                     |
+| **新增** | **Admin Origin 校验**（`docs/14` 的 CSRF 部分，Agent 02 交接时留给 03/07/12）                                                                                                             |
+| **新增** | `scheduling.ts` 补三条给 Agent 04 的硬警告（`NOW()` 时区陷阱 / 与 `docs/06` 分叉 / 索引形态）                                                                                             |
 
 ## 3. ⚠ 下游必须注意的破坏性变更
 
