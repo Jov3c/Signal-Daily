@@ -16,9 +16,10 @@
  * ```
  *
  * ── 鉴权 ─────────────────────────────────────────────────────────
- * 整个控制器套 `AdminGuard`（`docs/14`：Admin endpoint 强制 auth + role）。
- * 未认证 → 401；已认证但非 ADMIN → 403。授权按**库里的当前角色**判定，
- * 因此撤权立刻生效（Agent 02 的实现）。
+ * 整个控制器套 `AdminOriginGuard` + `AdminGuard`（`docs/14`：
+ * 「Admin endpoint 强制 auth + role」+「敏感 Admin mutation 进行 Origin check」）。
+ * 未认证 → 401；已认证但非 ADMIN → 403；变更类请求带了不匹配的 `Origin` → 403。
+ * 授权按**库里的当前角色**判定，因此撤权立刻生效（Agent 02 的实现）。
  *
  * `docs/09` 要求的「X 账号 Filter/Tab」不需要新端点：
  * `GET /admin/sources?type=X_USER` 就是它。
@@ -38,6 +39,7 @@ import {
 } from '@nestjs/common';
 import { AppError, PlatformErrorCode, envelope } from '@signal/contracts';
 import { AdminGuard } from '../../common/guards';
+import { AdminOriginGuard } from './admin-origin.guard';
 import {
   parseCreateSourceBody,
   parseSourceListQuery,
@@ -56,7 +58,14 @@ function invalid(errors: string[]): AppError {
   });
 }
 
-@UseGuards(AdminGuard)
+/**
+ * 守卫顺序是刻意的：**先 Origin 校验，再认证**。
+ *
+ * `AdminOriginGuard` 是纯内存判断（不查库），放在前面可以让跨源请求
+ * 在付出一次数据库往返之前就被拒掉。代价是「匿名 + Origin 不匹配」会返回
+ * 403 而不是 401 —— 那不泄露任何信息（只说明来源不对），可以接受。
+ */
+@UseGuards(AdminOriginGuard, AdminGuard)
 @Controller('admin/sources')
 export class SourcesController {
   // ⚠ 显式 @Inject：不要依赖 emitDecoratorMetadata（见 di-wiring.spec.ts）。

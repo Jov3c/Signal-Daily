@@ -467,3 +467,195 @@ describe('真实 MySQL —— 与 Agent 01 的 seed 数据共处', () => {
     expect(after.config).toEqual(before.config);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* §23 独立审查的回归守卫（必须在真库上跑）                             */
+/* ------------------------------------------------------------------ */
+
+describe('真实 MySQL —— BIGINT 上界（独立审查 F2）', () => {
+  it('超出驱动可绑定范围的 :id → 404 而不是 500', async () => {
+    // ⚠ 这条**只能在真库上测**：内存替身用字符串键，任何 id 都只是「查不到」，
+    // 复刻不了 Prisma 按有符号 64 位绑定失败这件事。
+    //
+    // 实测（work/_agent03/repro-bigint-bound.mjs）：
+    //   18446744073709551615（BIGINT UNSIGNED 的合法上限）→ PrismaClientUnknownRequestError
+    // 也就是说不设上界的话，连「合法」的 id 都会把 404 变成 500。
+    for (const id of [
+      '18446744073709551615', // 无符号上限 —— 合法但驱动绑不了
+      '9223372036854775808', // 有符号上限 + 1
+      '99999999999999999999', // 20 位但远超范围
+    ]) {
+      const response = await request(`/api/v1/admin/sources/${id}`);
+      expect(response.status, `id=${id} 应当 404 而不是 500`).toBe(404);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('SOURCE_NOT_FOUND');
+    }
+  });
+
+  it('边界对照：有符号上限本身是「可绑定的」→ 404（查不到，而不是 500）', async () => {
+    const response = await request('/api/v1/admin/sources/9223372036854775807');
+    expect(response.status).toBe(404);
+  });
+
+  it('对照组：畸形 id 与非数字同样 404（既有行为未回归）', async () => {
+    for (const id of ['not-a-number', '0', '-1', '0x1f', '1.5']) {
+      expect((await request(`/api/v1/admin/sources/${id}`)).status, `id=${id}`).toBe(404);
+    }
+  });
+});
+
+describe('真实 MySQL —— 并发建同一 slug（独立审查 P3-3）', () => {
+  it('4 个并发请求：恰好一个 201，其余 409，**没有 500**', async () => {
+    // 这条是**唯一**会走到 P2002 兜底分支的测试：
+    // 顺序请求永远先命中 `assertSlugAvailable` 预检，兜底分支从未被执行。
+    const slug = nextSlug();
+    const body = {
+      name: '并发',
+      slug,
+      type: 'RSS',
+      kind: 'MEDIA',
+      feedUrl: 'https://example.com/feed.xml',
+    };
+
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        request('/api/v1/admin/sources', { method: 'POST', body: JSON.stringify(body) }),
+      ),
+    );
+    const statuses = responses.map((r) => r.status).sort();
+
+    expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 409)).toHaveLength(3);
+    expect(statuses.filter((s) => s >= 500)).toEqual([]);
+
+    // 库里恰好一行。
+    expect(await prisma.source.count({ where: { slug } })).toBe(1);
+  });
+});
+
+describe('真实 MySQL —— list() 的真 SQL（独立审查 P3-4）', () => {
+  it('中文关键词能命中 name（对照：不存在的串返回 0 条）', async () => {
+    // 单元测试里这几个过滤是**替身自己实现的**，真实现从未被执行。
+    // 也刻意用**中文**探针 —— Agent 01 的 FULLTEXT 就是被纯 ASCII 探针骗过去的。
+    const marker = `模型评测${randomBytes(3).toString('hex')}`;
+    await request('/api/v1/admin/sources', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: `${marker} 甲`,
+        slug: nextSlug(),
+        type: 'RSS',
+        kind: 'MEDIA',
+        feedUrl: 'https://example.com/feed.xml',
+      }),
+    });
+    await request('/api/v1/admin/sources', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: `${marker} 乙`,
+        slug: nextSlug(),
+        type: 'RSS',
+        kind: 'MEDIA',
+        feedUrl: 'https://example.com/feed.xml',
+      }),
+    });
+
+    const hit = await request(`/api/v1/admin/sources?q=${encodeURIComponent(marker)}`);
+    expect(hit.status).toBe(200);
+    const hitBody = (await hit.json()) as {
+      data: { name: string; slug: string }[];
+      meta: { total: number };
+    };
+    expect(hitBody.meta.total).toBe(2);
+    expect(hitBody.data.every((row) => row.name.includes(marker))).toBe(true);
+
+    const miss = await request(`/api/v1/admin/sources?q=${marker}不存在`);
+    const missBody = (await miss.json()) as { meta: { total: number } };
+    expect(missBody.meta.total).toBe(0);
+  });
+
+  it('q 也能命中 slug', async () => {
+    const slug = nextSlug();
+    await request('/api/v1/admin/sources', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'slug 命中',
+        slug,
+        type: 'RSS',
+        kind: 'MEDIA',
+        feedUrl: 'https://example.com/feed.xml',
+      }),
+    });
+
+    const response = await request(`/api/v1/admin/sources?q=${slug}`);
+    const body = (await response.json()) as { meta: { total: number }; data: { slug: string }[] };
+    expect(body.meta.total).toBe(1);
+    expect(body.data[0]?.slug).toBe(slug);
+  });
+
+  it('enabled 过滤是真的下推到 SQL', async () => {
+    const slug = nextSlug();
+    const created = await request('/api/v1/admin/sources', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: '启停过滤',
+        slug,
+        type: 'RSS',
+        kind: 'MEDIA',
+        feedUrl: 'https://example.com/feed.xml',
+      }),
+    });
+    const id = ((await created.json()) as { data: { id: string } }).data.id;
+
+    const enabledBefore = await request(`/api/v1/admin/sources?q=${slug}&enabled=true`);
+    expect(((await enabledBefore.json()) as { meta: { total: number } }).meta.total).toBe(1);
+
+    await request(`/api/v1/admin/sources/${id}/disable`, { method: 'POST' });
+
+    const enabledAfter = await request(`/api/v1/admin/sources?q=${slug}&enabled=true`);
+    expect(((await enabledAfter.json()) as { meta: { total: number } }).meta.total).toBe(0);
+
+    const disabled = await request(`/api/v1/admin/sources?q=${slug}&enabled=false`);
+    expect(((await disabled.json()) as { meta: { total: number } }).meta.total).toBe(1);
+  });
+
+  it('分页的 skip/offset 真的生效（page=2 与 page=1 不重叠、不重不漏）', async () => {
+    const marker = `分页${randomBytes(3).toString('hex')}`;
+    for (let i = 0; i < 5; i += 1) {
+      await request('/api/v1/admin/sources', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: `${marker}-${i}`,
+          slug: nextSlug(),
+          type: 'RSS',
+          kind: 'MEDIA',
+          feedUrl: 'https://example.com/feed.xml',
+        }),
+      });
+    }
+
+    const first = await request(`/api/v1/admin/sources?q=${marker}&page=1&pageSize=2`);
+    const firstBody = (await first.json()) as {
+      data: { id: string }[];
+      meta: { page: number; pageSize: number; total: number; totalPages: number };
+    };
+    expect(firstBody.data).toHaveLength(2);
+    expect(firstBody.meta).toMatchObject({ page: 1, pageSize: 2, total: 5, totalPages: 3 });
+
+    const second = await request(`/api/v1/admin/sources?q=${marker}&page=2&pageSize=2`);
+    const secondBody = (await second.json()) as { data: { id: string }[]; meta: { page: number } };
+    expect(secondBody.data).toHaveLength(2);
+    expect(secondBody.meta.page).toBe(2);
+
+    const third = await request(`/api/v1/admin/sources?q=${marker}&page=3&pageSize=2`);
+    const thirdBody = (await third.json()) as { data: { id: string }[] };
+    expect(thirdBody.data).toHaveLength(1);
+
+    // 三页合起来恰好 5 条、无重复（skip 恒为 0 的话这条会红）。
+    const ids = [
+      ...firstBody.data.map((r) => r.id),
+      ...secondBody.data.map((r) => r.id),
+      ...thirdBody.data.map((r) => r.id),
+    ];
+    expect(new Set(ids).size).toBe(5);
+  });
+});

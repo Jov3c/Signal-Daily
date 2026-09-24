@@ -16,16 +16,17 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SOURCE_KINDS, SOURCE_TIERS, SOURCE_TYPES } from '@signal/contracts';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { toBigIntId, toIdString } from '../../common/prisma/bigint-id';
+import { toIdString } from '../../common/prisma/bigint-id';
 import { toContractEnum } from '../../common/prisma/prisma-enums';
 import { DUE_SOURCES_ORDER_BY, buildDueSourcesWhere } from './scheduling';
-import type {
-  CreateSourceInput,
-  SourceListQuery,
-  SourceListResult,
-  SourceRecord,
-  SourceRepository,
-  UpdateSourceInput,
+import {
+  toSourceId,
+  type CreateSourceInput,
+  type SourceListQuery,
+  type SourceListResult,
+  type SourceRecord,
+  type SourceRepository,
+  type UpdateSourceInput,
 } from './repository';
 
 /** Prisma 返回的 Source 行（只声明我们用到的部分）。 */
@@ -104,9 +105,15 @@ function toRecord(row: SourceRow): SourceRecord {
   };
 }
 
-/** 把服务层的 id（string）转成库里的 bigint。 */
+/**
+ * 把服务层的 id（string）转成库里的 bigint。
+ *
+ * 用本模块的 `toSourceId`（带**驱动可绑定上界**校验），不是公共的 `toBigIntId` ——
+ * 后者只判「是不是 20 位以内的数字」，超过 `2^63-1` 的值会让 Prisma 抛
+ * `PrismaClientUnknownRequestError`，把本该 404 的请求变成 500。
+ */
 function requireBigIntId(rawId: string): bigint {
-  const id = toBigIntId(rawId);
+  const id = toSourceId(rawId);
   if (id === null) {
     // 服务层总是先 findById（畸形 id 在那一层就变成 404），
     // 走到这里说明是编程错误，不是用户输入问题。
@@ -147,8 +154,9 @@ export class PrismaSourceRepository implements SourceRepository {
   }
 
   async findById(id: string): Promise<SourceRecord | null> {
-    const bigIntId = toBigIntId(id);
-    // 畸形 id 直接当作「不存在」，让上层走 404 —— 而不是让 BigInt() 抛异常变 500。
+    // 畸形 **或超出驱动可绑定范围** 的 id 一律当作「不存在」，让上层走 404 ——
+    // 而不是让 BigInt()/Prisma 抛异常变成 500。
+    const bigIntId = toSourceId(id);
     if (bigIntId === null) return null;
 
     const row = await this.prisma.source.findUnique({ where: { id: bigIntId } });

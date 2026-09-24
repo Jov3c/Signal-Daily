@@ -150,6 +150,41 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(record, key);
 }
 
+/**
+ * 顶层允许出现的键（create 与 patch 共用同一张表 —— `docs/04` 的 PATCH 是局部更新，
+ * 可改字段与新建一致）。
+ */
+const TOP_LEVEL_KEYS: readonly string[] = [
+  'name',
+  'slug',
+  'type',
+  'kind',
+  'tier',
+  'official',
+  'baseUrl',
+  'feedUrl',
+  'externalId',
+  'language',
+  'priority',
+  'trustScore',
+  'fetchIntervalSeconds',
+  'enabled',
+  'config',
+];
+
+/**
+ * 拒绝顶层未知键。
+ *
+ * ⚠ 为什么 `config` 里的未知键早就拒绝了，顶层却一直没做（独立审查 P4-2）：
+ * 「把 `includeQuotes` 敲成 `includQuotes`，保存会成功、行为却静默变了」
+ * 这个论证对顶层的 `tier` → `tierr` **完全一样**。不拒绝的话，
+ * 管理员以为改成了 S 级，实际什么都没发生，而响应是 200。
+ */
+function rejectUnknownTopLevelKeys(record: Record<string, unknown>, errors: string[]): void {
+  const unknown = Object.keys(record).filter((key) => !TOP_LEVEL_KEYS.includes(key));
+  if (unknown.length > 0) errors.push(`unknown field(s): ${unknown.join(', ')}`);
+}
+
 /** 控制字符会进日志与响应头，任何字符串字段都不接受。 */
 function hasControlCharacter(value: string): boolean {
   for (const char of value) {
@@ -171,7 +206,11 @@ function readStringField(
     return undefined;
   }
   const value = raw.trim();
-  if (value === '' || value.length > maxLength) {
+  // ⚠ 用**码点**数，不用 `value.length`（UTF-16 码元数）。
+  // MySQL 的 `VARCHAR(n)` 按字符计，而 JS 的 `.length` 会把一个 emoji
+  // （代理对）算成 2 —— 128 个 emoji 只有 128 个字符，却会被 `.length`
+  // 判成 256 而误拒（独立审查 P4-1 实测）。
+  if (value === '' || [...value].length > maxLength) {
     errors.push(`${label} must be a non-empty string of at most ${maxLength} characters`);
     return undefined;
   }
@@ -246,6 +285,7 @@ export function parseCreateSourceBody(body: unknown): ParseResult<CreateSourceDt
   if (record === null) return { ok: false, errors: ['body must be a JSON object'] };
 
   const errors: string[] = [];
+  rejectUnknownTopLevelKeys(record, errors);
 
   const name = readStringField(record.name, 'name', MAX_NAME_LENGTH, errors);
   const slug = readStringField(record.slug, 'slug', MAX_SLUG_LENGTH, errors);
@@ -391,17 +431,29 @@ export function parseUpdateSourceBody(body: unknown): ParseResult<UpdateSourceDt
   if (record === null) return { ok: false, errors: ['body must be a JSON object'] };
 
   const errors: string[] = [];
+  rejectUnknownTopLevelKeys(record, errors);
   const patch: UpdateSourceDto = {};
 
+  // `name` / `slug` 是 NOT NULL 列。显式传 `null` 必须报错，而不是静默 no-op ——
+  // 后者会让调用方以为「清空了」（独立审查 P4-2 实测：`PATCH {name:null}` 返回 200
+  // 但什么都没改，而 `POST {name:null}` 是 400，同一字段两种处置）。
   if (hasOwn(record, 'name')) {
-    const name = readStringField(record.name, 'name', MAX_NAME_LENGTH, errors);
-    if (typeof name === 'string') patch.name = name;
+    if (record.name === null) {
+      errors.push('name must not be null');
+    } else {
+      const name = readStringField(record.name, 'name', MAX_NAME_LENGTH, errors);
+      if (typeof name === 'string') patch.name = name;
+    }
   }
   if (hasOwn(record, 'slug')) {
-    const slug = readStringField(record.slug, 'slug', MAX_SLUG_LENGTH, errors);
-    if (typeof slug === 'string') {
-      if (SLUG_PATTERN.test(slug)) patch.slug = slug;
-      else errors.push('slug must be lowercase letters, digits and hyphens');
+    if (record.slug === null) {
+      errors.push('slug must not be null');
+    } else {
+      const slug = readStringField(record.slug, 'slug', MAX_SLUG_LENGTH, errors);
+      if (typeof slug === 'string') {
+        if (SLUG_PATTERN.test(slug)) patch.slug = slug;
+        else errors.push('slug must be lowercase letters, digits and hyphens');
+      }
     }
   }
   if (hasOwn(record, 'type')) {
@@ -459,7 +511,24 @@ export function parseUpdateSourceBody(body: unknown): ParseResult<UpdateSourceDt
     if (value !== undefined) patch.fetchIntervalSeconds = value;
   }
   if (hasOwn(record, 'config')) {
-    patch.config = record.config;
+    // ⚠ `config: null` **明确拒绝**（独立审查 P3-1）。
+    //
+    // 曾经的行为是：`null` 被当成「空对象 → 全部走默认值」，于是
+    // 「清空配置」这个意图被执行成了「静默重置成默认值」——
+    // 管理员把 maxItems 设成 250，客户端发 `config: null`，得到 200 成功，
+    // 而库里的 250 被悄悄改回 50；同一个操作对 X_USER 却是 400。
+    //
+    // 「清空」与「重置为默认值」是两件不同的事，且对 X_USER / MANUAL_URL
+    // 这类 config 必填的类型根本无法表达。所以这里明确拒绝，
+    // 让调用方必须把想要的完整配置写出来。
+    if (record.config === null) {
+      errors.push(
+        'config must not be null: send the complete type-specific config instead ' +
+          '(omitting config leaves it unchanged)',
+      );
+    } else {
+      patch.config = record.config;
+    }
   }
 
   if (errors.length > 0) return { ok: false, errors };

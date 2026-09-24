@@ -214,21 +214,57 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
    */
   const ADMIN_ROUTE_OWNERS = ['modules/sources/controller.ts'];
 
-  it('只有登记过的模块可以声明 admin 路由前缀', () => {
-    const offenders = sourceFiles()
+  /**
+   * 判定「哪个文件声明了 admin 路由」的**唯一**规则。
+   *
+   * 抽成函数是为了让下面那条「有牙齿」的用例能跑**同一套代码** ——
+   * 独立审查指出：早先那版反证只对字符串数组调了一次 `filter`，
+   * 连正则都没碰到，是纯粹的同义反复。
+   *
+   * ⚠ 已知残余缺口（记录而非假装没有）：正则只认 `@Controller('...')` 这种
+   * 字面量写法。`@Controller(ADMIN_SOURCES)`（常量）与模板字符串
+   * `@Controller(`admin/x`)` 都**读不到**。本仓库目前全是字面量写法，
+   * 所以现在够用；将来若引入常量，请先修这里。
+   */
+  const ADMIN_CONTROLLER_PATTERN = /Controller\(\s*['"][^'"]*admin/i;
+
+  function adminRouteOwnerOffenders(files: { relativePath: string; code: string }[]): string[] {
+    return files
       .filter((file) => file.relativePath.startsWith('modules/'))
-      .filter((file) => /Controller\(\s*['"][^'"]*admin/i.test(file.code))
+      .filter((file) => ADMIN_CONTROLLER_PATTERN.test(file.code))
       .map((file) => file.relativePath)
       .filter((path) => !ADMIN_ROUTE_OWNERS.includes(path));
+  }
 
-    expect(offenders).toEqual([]);
+  it('只有登记过的模块可以声明 admin 路由前缀', () => {
+    expect(adminRouteOwnerOffenders(sourceFiles())).toEqual([]);
   });
 
-  it('admin 路由所有者守卫本身有牙齿：未登记的模块会被抓到', () => {
-    // 反证：换成一个没登记过的路径，同一组过滤必须命中。
-    const mounted = ['modules/sources/controller.ts', 'modules/bookmarks/controller.ts'];
-    const offenders = mounted.filter((path) => !ADMIN_ROUTE_OWNERS.includes(path));
-    expect(offenders).toEqual(['modules/bookmarks/controller.ts']);
+  it('守卫有牙齿：把合成样本喂给**同一套过滤**，未登记的模块必须被命中', () => {
+    const synthetic = [
+      // 登记过的所有者 —— 必须放行
+      { relativePath: 'modules/sources/controller.ts', code: "@Controller('admin/sources')" },
+      // 未登记的模块 —— 必须被抓到
+      { relativePath: 'modules/bookmarks/controller.ts', code: "@Controller('admin/bookmarks')" },
+      // 非 admin 路由 —— 必须放行
+      { relativePath: 'modules/other/controller.ts', code: "@Controller('contents')" },
+      // 不在 modules/ 下 —— 不在本守卫范围内
+      { relativePath: 'common/guards/admin.guard.ts', code: "@Controller('admin/x')" },
+      // 双引号写法也要认
+      { relativePath: 'modules/two/controller.ts', code: '@Controller("admin/two")' },
+    ];
+
+    expect(adminRouteOwnerOffenders(synthetic)).toEqual([
+      'modules/bookmarks/controller.ts',
+      'modules/two/controller.ts',
+    ]);
+  });
+
+  it('残留缺口有记录：常量与模板字符串写法读不到（提醒将来修）', () => {
+    // 这条**不是在断言「这是对的」**，而是把已知缺口钉在测试里，
+    // 免得将来有人以为守卫覆盖了所有写法。
+    expect(ADMIN_CONTROLLER_PATTERN.test("@Controller(ADMIN_SOURCES)")).toBe(false);
+    expect(ADMIN_CONTROLLER_PATTERN.test('@Controller(`admin/sources`)')).toBe(false);
   });
 
   it('代码里出现的错误码字面量都符合 DOMAIN_REASON 且已登记', () => {

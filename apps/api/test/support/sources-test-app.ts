@@ -19,7 +19,7 @@ import { Test } from '@nestjs/testing';
 import type { INestApplication, Type } from '@nestjs/common';
 import { SourcesModule } from '../../src/modules/sources/module';
 import { SOURCE_CLOCK } from '../../src/modules/sources/clock';
-import { SOURCE_REPOSITORY } from '../../src/modules/sources/repository';
+import { SOURCE_REPOSITORY, type SourceRepository } from '../../src/modules/sources/repository';
 import { SOURCE_FETCH_ENQUEUER } from '../../src/modules/sources/source-enqueuer';
 import { SOURCE_TESTER, SOURCE_TESTER_DEPS } from '../../src/modules/sources/source-tester';
 import { SOURCE_CONFIG, type SourceConfig } from '../../src/modules/sources/source.config';
@@ -65,6 +65,8 @@ export const TEST_USER_EMAIL = 'reader@signal.test';
 export function createTestSourceConfig(overrides: Partial<SourceConfig> = {}): SourceConfig {
   return {
     nodeEnv: 'test',
+    appBaseUrl: 'http://localhost:3000',
+    apiBaseUrl: 'http://localhost:3001/api',
     fetchTimeoutMs: 1_000,
     fetchMaxBytes: 65_536,
     xApiBearerToken: null,
@@ -78,7 +80,7 @@ export type SourcesTestApp = {
   app: INestApplication;
   baseUrl: string;
   request(path: string, init?: RequestInit & { cookie?: string }): Promise<Response>;
-  sources: InMemorySourceRepository;
+  sources: SourceRepository;
   tester: FakeSourceTester;
   enqueuer: FakeSourceFetchEnqueuer;
   clock: FakeSourceClock;
@@ -98,6 +100,13 @@ export async function createSourcesTestApp(
   options: {
     sourceConfig?: Partial<SourceConfig>;
     probeControllers?: Type<unknown>[];
+    /**
+     * 换掉仓储实现。
+     *
+     * 用途：构造**竞态**场景 —— 例如「预检说没有、插入时撞唯一约束」，
+     * 那是「先查后写」的真实并发形态，只有这样才能走到 P2002 兜底分支。
+     */
+    sourceRepository?: SourceRepository;
   } = {},
 ): Promise<SourcesTestApp> {
   const authConfig = createTestAuthConfig();
@@ -106,7 +115,7 @@ export async function createSourcesTestApp(
   const authRepository = new InMemoryAuthRepository();
   const userRepository = new InMemoryUserRepository();
   const mail = new FakeMailSender();
-  const sources = new InMemorySourceRepository();
+  const sources = options.sourceRepository ?? new InMemorySourceRepository();
   const tester = new FakeSourceTester();
   const enqueuer = new FakeSourceFetchEnqueuer();
   const clock = new FakeSourceClock();

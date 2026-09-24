@@ -70,6 +70,7 @@ export class SourcesService {
       externalId: input.externalId,
       feedUrl: input.feedUrl,
       baseUrl: input.baseUrl,
+      previousConfig: null,
     });
 
     // 先查一次给出友好的 409；并发下仍可能撞上唯一约束，那时由 P2002 兜底。
@@ -120,6 +121,9 @@ export class SourcesService {
       externalId: effective.externalId,
       feedUrl: effective.feedUrl,
       baseUrl: effective.baseUrl,
+      // 让 seed / seedNote 这类「来源标记」能从已有 config 继承下来 ——
+      // 否则一次只改 handle 的 PATCH 会把它们静默抹掉（独立审查 P3-2）。
+      previousConfig: existing.config,
     });
 
     // 只有调用方显式给了 config（或者换了 type，旧 config 必然不再匹配）
@@ -144,7 +148,17 @@ export class SourcesService {
     if (patch.fetchIntervalSeconds !== undefined) {
       update.fetchIntervalSeconds = patch.fetchIntervalSeconds;
     }
-    if (patch.enabled !== undefined) update.enabled = patch.enabled;
+    if (patch.enabled !== undefined) {
+      update.enabled = patch.enabled;
+      // ★ 「停用 → 启用」这个**状态跃迁**必须推进 nextFetchAt，
+      //   与 `POST /:id/enable` 是同一套语义。
+      //
+      //   独立审查 P2-1 实测过不一致的后果：一个 7 天间隔的来源被抓过一次后
+      //   `next_fetch_at = +7d`，管理员停用、再用编辑表单（走 PATCH）启用，
+      //   界面显示「已启用」，但调度器 7 天内不会碰它 ——
+      //   正是 `scheduling.ts` 文件头要防的那类「后台显示已启用，worker 不抓」。
+      if (patch.enabled && !existing.enabled) update.nextFetchAt = this.clock.now();
+    }
 
     // 归一化后的三个列值总是参与更新：它们可能因为 config 里的别名
     // （`config.feedUrl` / `config.repo`）而被提升到列上。

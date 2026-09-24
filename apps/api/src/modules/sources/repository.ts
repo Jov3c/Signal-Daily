@@ -10,10 +10,49 @@
  * 由 `prisma-source.repository.ts` 在边界用 `toContractEnum()` 做带校验的收敛。
  */
 
+import { toBigIntId } from '../../common/prisma/bigint-id';
 import type { SourceKind, SourceTier, SourceType } from '@signal/contracts';
 
 /** 注入 token。 */
 export const SOURCE_REPOSITORY = 'SOURCE_REPOSITORY';
+
+/**
+ * 能被**驱动安全绑定**的 BIGINT 上界（有符号 64 位最大值）。
+ *
+ * ⚠ 为什么不是 `BIGINT UNSIGNED` 的上限 —— 这一条独立审查实测出来的：
+ * Prisma 把 JS `bigint` 按**有符号** 64 位绑定，`sources.id` 虽然是
+ * `BIGINT UNSIGNED`，但任何超过 `2^63-1` 的值（**包括合法的无符号上限
+ * `18446744073709551615` 本身**）都会让驱动抛
+ * `PrismaClientUnknownRequestError`：
+ *
+ * ```
+ * 99999999999999999999  -> THROW PrismaClientUnknownRequestError
+ * 18446744073709551615  -> THROW PrismaClientUnknownRequestError   ← 连合法上限都炸
+ * ```
+ * （复现脚本：`work/_agent03/repro-bigint-bound.mjs`）
+ *
+ * 后果是：`GET /admin/sources/18446744073709551615` 会返回 **500 而不是 404**，
+ * 污染 5xx 告警。`common/prisma/bigint-id.ts` 的 `toBigIntId()` 只校验
+ * 「20 位以内的十进制数字」，没有上界 —— 那个文件属于 Agent 02，
+ * 我不越界修改，因此在本模块边界上再收一次。
+ *
+ * 超界的 id 一律当作「**不存在**」（→ 404），而不是「非法输入」（→ 400）：
+ * 对调用方而言这两者没有区别，而 404 不会产生 5xx 噪声。
+ *
+ * 已提交给契约 Owner：见 `handoffs/CONTRACT_CHANGE_REQUEST-agent-03.md`。
+ */
+export const MAX_BINDABLE_ID = 9_223_372_036_854_775_807n;
+
+/**
+ * 服务层的 id（string）→ 库里的 `bigint`；不可绑定的值返回 `null`。
+ *
+ * **本模块内一律用这个，不要直接用 `toBigIntId()`。**
+ */
+export function toSourceId(raw: string): bigint | null {
+  const id = toBigIntId(raw);
+  if (id === null) return null;
+  return id > MAX_BINDABLE_ID ? null : id;
+}
 
 /**
  * 一条 Source 的读模型。
@@ -72,8 +111,13 @@ export type CreateSourceInput = {
 /**
  * 局部更新。未出现的键 = 不改动。
  *
- * `config: null` 是**有意义的**（清空 config），因此不能靠 `undefined` 表达
- * 「清空」—— 这正是这里用 `| null` 而不是可选键的原因。
+ * ⚠ 关于 `config: null`：类型上允许，但**服务层永远不会传 null** ——
+ * DTO 层会以 400 明确拒绝它（独立审查 P3-1）。
+ *
+ * 原先的注释写着「`null` 表示清空 config」，而实现并不清空，
+ * 而是把 `null` 喂给 `buildSourceConfig` 当成「空对象 → 全部走默认值」，
+ * 于是「清空」被执行成了「静默重置成默认值」。注释与实现不符本身就是缺陷，
+ * 因此两处一起改：行为改为拒绝，注释改为如实描述。
  */
 export type UpdateSourceInput = {
   name?: string;

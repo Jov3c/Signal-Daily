@@ -62,6 +62,13 @@ export type SourceConfigInput = {
   externalId: string | null;
   feedUrl: string | null;
   baseUrl: string | null;
+  /**
+   * 库里**已有**的 config（新建时为 null）。
+   *
+   * 唯一用途是让 `seed` / `seedNote` 这类「来源标记」能被继承 ——
+   * 见 `copyPassthrough()`。
+   */
+  previousConfig: Record<string, unknown> | null;
 };
 
 /**
@@ -186,10 +193,23 @@ function readEnum<T extends string>(
  * 全量快照让「管理员看到的」与「库里存的」与「采集器读到的」三者一致。
  */
 
-/** 保留 seed 标记（若调用方回传了）。 */
-function copyPassthrough(raw: Record<string, unknown>, target: Record<string, unknown>): void {
+/**
+ * 保留 `seed` / `seedNote` 标记。
+ *
+ * ⚠ 取值顺序是「请求体优先，其次从**已有 config** 继承」。
+ * 只从请求体取是错的（独立审查 P3-2 实测）：管理员在 Admin UI 里只改一个
+ * `handle`，表单往往只回传业务字段，于是 seed 标记被静默抹掉 ——
+ * 而它是区分「seed 演示数据」与「真实数据」的**唯一**标记，
+ * `docs/00` 又要求这些演示源上线前人工核验。丢了就再也分不出来。
+ */
+function copyPassthrough(
+  raw: Record<string, unknown>,
+  target: Record<string, unknown>,
+  previous: Record<string, unknown> | null,
+): void {
   for (const key of PASSTHROUGH_KEYS) {
-    if (raw[key] !== undefined) target[key] = raw[key];
+    const value = raw[key] ?? previous?.[key];
+    if (value !== undefined) target[key] = value;
   }
 }
 
@@ -227,6 +247,7 @@ export function buildSourceConfig(input: SourceConfigInput): ValidatedSourceConf
     externalId: input.externalId,
     feedUrl: input.feedUrl,
     baseUrl: readOptionalUrl(input.baseUrl),
+    previous: input.previousConfig,
   };
 
   switch (input.type) {
@@ -250,7 +271,12 @@ export function buildSourceConfig(input: SourceConfigInput): ValidatedSourceConf
   }
 }
 
-type SharedInput = { externalId: string | null; feedUrl: string | null; baseUrl: string | null };
+type SharedInput = {
+  externalId: string | null;
+  feedUrl: string | null;
+  baseUrl: string | null;
+  previous: Record<string, unknown> | null;
+};
 
 /**
  * RSS / Atom。
@@ -279,7 +305,7 @@ function validateRss(raw: Record<string, unknown>, shared: SharedInput): Validat
     MAX_RSS_MAX_ITEMS,
     DEFAULT_RSS_MAX_ITEMS,
   );
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return { config, externalId: shared.externalId, feedUrl, baseUrl: shared.baseUrl };
 }
@@ -316,7 +342,7 @@ function validateXUser(raw: Record<string, unknown>, shared: SharedInput): Valid
   config.includeQuotes = readBoolean(type, raw, 'includeQuotes', true);
   config.includeReplies = readBoolean(type, raw, 'includeReplies', false);
   config.includeReposts = readBoolean(type, raw, 'includeReposts', false);
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return {
     config,
@@ -346,7 +372,7 @@ function validateGithubRepo(
 
   const config: Record<string, unknown> = {};
   config.includeReleases = readBoolean(type, raw, 'includeReleases', true);
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return { config, externalId: repo, feedUrl: null, baseUrl: shared.baseUrl };
 }
@@ -362,7 +388,7 @@ function validateHackerNews(
   const config: Record<string, unknown> = {};
   config.feed = readEnum(type, raw, 'feed', HACKER_NEWS_FEEDS, 'top');
   config.minScore = readInteger(type, raw, 'minScore', 0, 10_000, 0);
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return { config, externalId: shared.externalId, feedUrl: null, baseUrl: shared.baseUrl };
 }
@@ -386,7 +412,7 @@ function validateHuggingFace(
 
   const config: Record<string, unknown> = {};
   config.repoType = readEnum(type, raw, 'repoType', HUGGINGFACE_REPO_TYPES, 'model');
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return { config, externalId: repoId, feedUrl: null, baseUrl: shared.baseUrl };
 }
@@ -406,7 +432,7 @@ function validateManualUrl(raw: Record<string, unknown>, shared: SharedInput): V
   const config: Record<string, unknown> = { url: safeUrl };
   const note = readString(type, raw, 'note', 500);
   if (note !== undefined) config.note = note;
-  copyPassthrough(raw, config);
+  copyPassthrough(raw, config, shared.previous);
 
   return {
     config,

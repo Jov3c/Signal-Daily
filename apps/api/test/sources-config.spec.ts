@@ -12,13 +12,23 @@ import { SourceType } from '@signal/contracts';
 import { buildSourceConfig } from '../src/modules/sources/source-config.schema';
 import { UrlSafetyError } from '../src/modules/sources/url-safety';
 
-function build(type: SourceType, config: unknown, rest: Partial<{ externalId: string | null; feedUrl: string | null; baseUrl: string | null }> = {}) {
+function build(
+  type: SourceType,
+  config: unknown,
+  rest: Partial<{
+    externalId: string | null;
+    feedUrl: string | null;
+    baseUrl: string | null;
+    previousConfig: Record<string, unknown> | null;
+  }> = {},
+) {
   return buildSourceConfig({
     type,
     config,
     externalId: rest.externalId ?? null,
     feedUrl: rest.feedUrl ?? null,
     baseUrl: rest.baseUrl ?? null,
+    previousConfig: rest.previousConfig ?? null,
   });
 }
 
@@ -180,6 +190,37 @@ describe('X_USER', () => {
 
   it('未知键 → 拒绝（拼错的 includQuotes 必须当场报错）', () => {
     expectConfigInvalid(SourceType.X_USER, { handle: 'karpathy', includQuotes: true });
+  });
+
+  it('**局部** config 的 PATCH 会从已有 config 继承 seed 标记（独立审查 P3-2）', () => {
+    // 曾经的缺陷：`copyPassthrough` 只从请求体取值，于是管理员在 Admin UI 里
+    // 只改一个 handle（表单只回传业务字段）就会把 seed 标记静默抹掉 ——
+    // 而那是区分「seed 演示数据」与「真实数据」的唯一标记。
+    const result = build(
+      SourceType.X_USER,
+      { handle: 'karpathy', includeQuotes: true },
+      {
+        previousConfig: {
+          handle: 'karpathy',
+          includeQuotes: true,
+          includeReplies: false,
+          seed: true,
+          seedNote: '来自 seed',
+        },
+      },
+    );
+
+    expect(result.config.seed).toBe(true);
+    expect(result.config.seedNote).toBe('来自 seed');
+  });
+
+  it('请求体里显式给了 seed 标记时以请求体为准', () => {
+    const result = build(
+      SourceType.X_USER,
+      { handle: 'karpathy', seed: false },
+      { previousConfig: { handle: 'karpathy', seed: true } },
+    );
+    expect(result.config.seed).toBe(false);
   });
 
   it('seed 标记被接受并保留', () => {

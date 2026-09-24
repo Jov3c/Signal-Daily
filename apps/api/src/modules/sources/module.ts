@@ -17,6 +17,7 @@
 
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { AdminOriginGuard } from './admin-origin.guard';
 import { SourcesController } from './controller';
 import { SOURCE_CLOCK, SystemSourceClock } from './clock';
 import { PrismaSourceRepository } from './prisma-source.repository';
@@ -44,6 +45,8 @@ import { SourcesService } from './service';
     // 入队选项：生产为空对象（走 ENQUEUE_TIMEOUT_MS），测试可覆盖成很短的超时。
     { provide: SOURCE_ENQUEUER_OPTIONS, useValue: {} },
     { provide: SOURCE_FETCH_ENQUEUER, useClass: BullSourceFetchEnqueuer },
+    // `docs/14`：「敏感 Admin mutation 进行 Origin check」。
+    AdminOriginGuard,
     SourcesService,
   ],
   exports: [SourcesService, SOURCE_REPOSITORY, SOURCE_CLOCK],

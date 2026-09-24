@@ -18,6 +18,7 @@ import {
   type SourcesTestApp,
 } from './support/sources-test-app';
 import { registeredRoutes } from './support/test-app';
+import { InMemorySourceRepository } from './support/source-fakes';
 
 /** 契约里的 8 条路由。多一条、少一条都必须让测试变红。 */
 const CONTRACT_ROUTES = [
@@ -622,5 +623,349 @@ describe('Admin Source Registry —— test / fetch-now', () => {
       cookie,
     });
     expect(f.status).toBe(404);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §23 独立审查（工程向）发现的回归守卫                                 */
+/* ------------------------------------------------------------------ */
+
+describe('独立审查回归 —— PATCH 的 enabled 必须与 /enable 同一套语义（P2-1）', () => {
+  let app: SourcesTestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    app = await createSourcesTestApp();
+    cookie = await app.login(TEST_ADMIN_EMAIL, UserRole.ADMIN);
+  });
+
+  async function createSource(): Promise<string> {
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      body: JSON.stringify({
+        name: 'PATCH enabled',
+        slug: nextSlug('patch-enable'),
+        type: 'RSS',
+        kind: 'MEDIA',
+        feedUrl: 'https://example.com/feed.xml',
+        // 合法上限：抓一次之后 next_fetch_at 会停在 7 天后。
+        fetchIntervalSeconds: 604800,
+      }),
+    });
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { data: { id: string } }).data.id;
+  }
+
+  /** 模拟「抓过一次」：调度器把 next_fetch_at 推到 7 天后。 */
+  function scheduleFarFuture(id: string): string {
+    const far = new Date(app.clock.now().getTime() + 7 * 24 * 3_600_000);
+    const row = app.sources.rows.get(id);
+    if (row === undefined) throw new Error(`找不到 ${id}`);
+    app.sources.rows.set(id, { ...row, nextFetchAt: far });
+    return far.toISOString();
+  }
+
+  it('PATCH {enabled:true} 也推进 nextFetchAt（与 POST /:id/enable 一致）', async () => {
+    const id = await createSource();
+    await app.request(`/api/v1/admin/sources/${id}/disable`, { method: 'POST', cookie });
+
+    app.clock.advanceSeconds(3_600);
+    const far = scheduleFarFuture(id);
+
+    const response = await app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { enabled: boolean; nextFetchAt: string } };
+
+    expect(body.data.enabled).toBe(true);
+    expect(body.data.nextFetchAt).not.toBe(far);
+    // ★ 不再停在 7 天后 —— 否则界面显示「已启用」，调度器却一周不碰它。
+    expect(body.data.nextFetchAt).toBe(app.clock.now().toISOString());
+  });
+
+  it('对照组：PATCH 其他字段不会推进 nextFetchAt', async () => {
+    const id = await createSource();
+    const far = scheduleFarFuture(id);
+    app.clock.advanceSeconds(3_600);
+
+    const response = await app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      body: JSON.stringify({ priority: 66 }),
+    });
+    const body = (await response.json()) as { data: { nextFetchAt: string } };
+    expect(body.data.nextFetchAt).toBe(far);
+  });
+
+  it('PATCH {enabled:false} 不推进 nextFetchAt（与 disable 一致）', async () => {
+    const id = await createSource();
+    const before = app.sources.rows.get(id)?.nextFetchAt?.toISOString();
+
+    const response = await app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { enabled: boolean; nextFetchAt: string } };
+    expect(body.data.enabled).toBe(false);
+    expect(body.data.nextFetchAt).toBe(before);
+  });
+
+  it('对已启用的来源 PATCH {enabled:true} 不重置（幂等，与 /enable 一致）', async () => {
+    const id = await createSource();
+    const before = app.sources.rows.get(id)?.nextFetchAt?.toISOString();
+    app.clock.advanceSeconds(600);
+
+    const response = await app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      body: JSON.stringify({ enabled: true }),
+    });
+    const body = (await response.json()) as { data: { nextFetchAt: string } };
+    expect(body.data.nextFetchAt).toBe(before);
+  });
+});
+
+describe('独立审查回归 —— config 与顶层字段的静默改数据（P3-1 / P3-2 / P4-1 / P4-2）', () => {
+  let app: SourcesTestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    app = await createSourcesTestApp();
+    cookie = await app.login(TEST_ADMIN_EMAIL, UserRole.ADMIN);
+  });
+
+  async function create(body: unknown): Promise<string> {
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { data: { id: string } }).data.id;
+  }
+
+  function patch(id: string, body: unknown): Promise<Response> {
+    return app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      body: JSON.stringify(body),
+    });
+  }
+
+  const RSS = { type: 'RSS', kind: 'MEDIA', feedUrl: 'https://example.com/feed.xml' };
+
+  it('PATCH {config:null} → 400，而不是静默重置成默认值（P3-1）', async () => {
+    const id = await create({
+      ...RSS,
+      name: 'config 清空',
+      slug: nextSlug('config-null'),
+      config: { maxItems: 250 },
+    });
+
+    const response = await patch(id, { config: null });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_FAILED');
+
+    // 而且原来的 250 必须**没被动过** —— 这条才是「静默改数据」的正面证明。
+    const detail = await app.request(`/api/v1/admin/sources/${id}`, { cookie });
+    const detailBody = (await detail.json()) as { data: { config: Record<string, unknown> } };
+    expect(detailBody.data.config.maxItems).toBe(250);
+  });
+
+  it('局部 config 的 PATCH 保留 seed 标记（P3-2，HTTP 层）', async () => {
+    const id = await create({
+      name: 'seed 标记',
+      slug: nextSlug('seedmark'),
+      type: 'X_USER',
+      kind: 'PERSON',
+      config: { handle: 'karpathy', seed: true, seedNote: '来自 seed' },
+    });
+
+    // 管理员只改 tier，但表单把 config 一起回传了（且没带 seed 标记）。
+    const response = await patch(id, {
+      tier: 'S',
+      config: { handle: 'karpathy', includeQuotes: true },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { config: Record<string, unknown> } };
+    expect(body.data.config.seed).toBe(true);
+    expect(body.data.config.seedNote).toBe('来自 seed');
+  });
+
+  it('顶层未知字段 → 400（P4-2：`tierr` 拼错不再静默生效）', async () => {
+    const id = await create({ ...RSS, name: '未知键', slug: nextSlug('unknown-key') });
+
+    const response = await patch(id, { tierr: 'S', priority: 66 });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      error: { code: string; details: { fields: string[] } };
+    };
+    expect(body.error.code).toBe('VALIDATION_FAILED');
+    expect(body.error.details.fields.join(' ')).toContain('unknown field');
+    expect(body.error.details.fields.join(' ')).toContain('tierr');
+  });
+
+  it('PATCH {name:null} / {slug:null} → 400，而不是静默 no-op（P4-2）', async () => {
+    const id = await create({ ...RSS, name: 'null name', slug: nextSlug('null-name') });
+
+    expect((await patch(id, { name: null })).status).toBe(400);
+    expect((await patch(id, { slug: null })).status).toBe(400);
+  });
+
+  it('emoji 名字按**码点**计长（P4-1：128 个 emoji 不该被误拒）', async () => {
+    // MySQL 的 VARCHAR(255) 按字符计；JS 的 `.length` 把 emoji（代理对）算成 2。
+    // 128 个 emoji 只有 128 个字符 —— 用 `.length` 会得到 256 而误判超长。
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      body: JSON.stringify({
+        ...RSS,
+        name: '🚀'.repeat(128),
+        slug: nextSlug('emoji'),
+      }),
+    });
+    expect(response.status).toBe(201);
+
+    // 对照：真的超长（256 个 emoji = 256 字符）仍必须被拒。
+    const tooLong = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      body: JSON.stringify({
+        ...RSS,
+        name: '🚀'.repeat(256),
+        slug: nextSlug('emoji-long'),
+      }),
+    });
+    expect(tooLong.status).toBe(400);
+  });
+});
+
+describe('独立审查回归 —— P2002 兜底分支（P3-3）', () => {
+  /**
+   * 预检说「没有」，插入时撞唯一约束 —— 这正是「先查后写」的真实竞态。
+   *
+   * 顺序请求永远先命中 `assertSlugAvailable` 预检，所以 P2002 兜底分支
+   * 在任何其它测试里都不会被执行到（独立审查反证：单独关掉它依然全绿）。
+   */
+  class RacingRepository extends InMemorySourceRepository {
+    override async findBySlug(): Promise<null> {
+      return null;
+    }
+
+    override async create(): Promise<never> {
+      const error = new Error('Unique constraint failed on the fields: (`slug`)');
+      (error as { code?: string }).code = 'P2002';
+      throw error;
+    }
+  }
+
+  it('预检通过但插入撞唯一约束 → 409，而不是 500', async () => {
+    const app = await createSourcesTestApp({ sourceRepository: new RacingRepository() });
+    try {
+      const cookie = await app.login(TEST_ADMIN_EMAIL, UserRole.ADMIN);
+
+      const response = await app.request('/api/v1/admin/sources', {
+        method: 'POST',
+        cookie,
+        body: JSON.stringify({
+          name: 'race',
+          slug: 'race-slug',
+          type: 'RSS',
+          kind: 'MEDIA',
+          feedUrl: 'https://example.com/feed.xml',
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('SOURCE_DUPLICATE_SLUG');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('独立审查回归 —— Admin Origin 校验（docs/14 的 CSRF 部分）', () => {
+  let app: SourcesTestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    app = await createSourcesTestApp();
+    cookie = await app.login(TEST_ADMIN_EMAIL, UserRole.ADMIN);
+  });
+
+  const ALLOWED = 'http://localhost:3000';
+  const RSS = { type: 'RSS', kind: 'MEDIA', feedUrl: 'https://example.com/feed.xml' };
+
+  it('**不带** Origin（curl / 运维脚本）→ 放行（不能把运维通道打死）', async () => {
+    const response = await app.request('/api/v1/admin/sources', { cookie });
+    expect(response.status).toBe(200);
+  });
+
+  it('Origin = 站点源 → 放行', async () => {
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      headers: { origin: ALLOWED },
+      body: JSON.stringify({ ...RSS, name: 'origin ok', slug: nextSlug('origin-ok') }),
+    });
+    expect(response.status).toBe(201);
+  });
+
+  it('变更类请求带**不匹配**的 Origin → 403（跨站子域 CSRF）', async () => {
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      headers: { origin: 'http://evil.signal.example.com' },
+      body: JSON.stringify({ ...RSS, name: 'origin bad', slug: nextSlug('origin-bad') }),
+    });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('`Origin: null`（沙箱 iframe / file://）→ 403', async () => {
+    const created = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      body: JSON.stringify({ ...RSS, name: 'null origin', slug: nextSlug('null-origin') }),
+    });
+    const id = ((await created.json()) as { data: { id: string } }).data.id;
+
+    const response = await app.request(`/api/v1/admin/sources/${id}`, {
+      method: 'PATCH',
+      cookie,
+      headers: { origin: 'null' },
+      body: JSON.stringify({ priority: 60 }),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('读方法（GET）带不匹配的 Origin → 放行（只保护变更类请求）', async () => {
+    const response = await app.request('/api/v1/admin/sources', {
+      cookie,
+      headers: { origin: 'http://evil.example.com' },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('错误响应不回显收到的 Origin（攻击者可控字符串不进日志/响应）', async () => {
+    const response = await app.request('/api/v1/admin/sources', {
+      method: 'POST',
+      cookie,
+      headers: { origin: 'http://secret-attacker-host.example.com' },
+      body: JSON.stringify({ ...RSS, name: 'x', slug: nextSlug('x') }),
+    });
+    const raw = await response.text();
+    expect(raw).not.toContain('secret-attacker-host');
+    // 但要说清我们允许哪些，方便排查部署配置。
+    expect(raw).toContain(ALLOWED);
   });
 });

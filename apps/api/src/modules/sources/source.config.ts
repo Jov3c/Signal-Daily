@@ -22,6 +22,10 @@ export const SOURCE_CONFIG = 'SOURCE_CONFIG';
 
 export type SourceConfig = {
   nodeEnv: AppEnv['NODE_ENV'];
+  /** 站点地址（`APP_BASE_URL`）。Admin Origin 校验用。 */
+  appBaseUrl: string;
+  /** API 地址（`API_BASE_URL`）。Admin Origin 校验用。 */
+  apiBaseUrl: string;
   /** 单次取数的超时预算（毫秒），整条重定向链共享。 */
   fetchTimeoutMs: number;
   /** 单次取数的响应体上限（字节）。 */
@@ -38,6 +42,8 @@ export type SourceConfig = {
 export function buildSourceConfig(env: AppEnv): SourceConfig {
   return {
     nodeEnv: env.NODE_ENV,
+    appBaseUrl: env.APP_BASE_URL,
+    apiBaseUrl: env.API_BASE_URL,
     fetchTimeoutMs: env.SOURCE_FETCH_TIMEOUT_MS,
     fetchMaxBytes: env.SOURCE_FETCH_MAX_BYTES,
     xApiBearerToken: env.X_API_BEARER_TOKEN ?? null,

@@ -71,6 +71,43 @@ export function computeNextFetchAt(fetchIntervalSeconds: number, from: Date): Da
  *
  * 返回值是普通对象而不是 Prisma 生成类型：这样它不依赖 `@prisma/client`，
  * Agent 04 在自己的 Prisma client 上可以直接用。
+ *
+ * ── ⚠⚠ 给 Agent 04 的三条硬警告（独立审查提出，都是跨 Agent 的坑）──────────
+ *
+ * **① `now` 必须是应用侧时钟。绝不要用 SQL 的 `NOW()` 代替它。**
+ *
+ *    本机的 MySQL `time_zone = SYSTEM = Asia/Shanghai`，而 `next_fetch_at`
+ *    存的是 **UTC**（Prisma 按 UTC 读写 `DateTime`）。实测：
+ *
+ *    ```
+ *    NOW(3)           = 2026-09-24T09:55:05.129Z   ← MySQL 认为的「现在」
+ *    UTC_TIMESTAMP(3) = 2026-09-24T01:55:05.129Z   ← 真正的 UTC
+ *    ```
+ *
+ *    任何手写 SQL / 迁移 / 运维脚本里的 `WHERE next_fetch_at <= NOW()`
+ *    都会让来源**提前 8 小时**到期 —— 静默、无报错、后台完全看不出来。
+ *    要用 SQL 表达就用 `UTC_TIMESTAMP()`，或者直接绑定 Prisma 的 `Date`。
+ *
+ * **② 本规则与 `docs/06` 的**字面**表述不一致，以本文件为准。**
+ *
+ *    `docs/06` 写的是「每分钟查 `enabled && next_fetch_at <= now`」，
+ *    没有提 NULL。若照字面实现，Agent 01 seed 出来的 8 个来源
+ *    （`next_fetch_at` 全是 NULL）**永远不会被采集**，而且是静默的。
+ *    已提交 `CONTRACT_CHANGE_REQUEST-agent-03.md` 第 5 项请求把这条写进文档；
+ *    在文档更新前，**以本文件为准**。
+ *
+ * **③ 这条查询走的是覆盖索引扫描（`type=index`），不是范围扫描（`type=range`）。**
+ *
+ *    `OR ... IS NULL` 会让优化器放弃 range 访问路径。实测 `EXPLAIN`：
+ *
+ *    ```
+ *    带 OR IS NULL     -> type=index  key=sources_enabled_next_fetch_at_idx  rows=8
+ *    只判 <= now       -> type=range  key=sources_enabled_next_fetch_at_idx  rows=1
+ *    ```
+ *
+ *    当前规模（几十到几千行）代价可忽略：`enabled` 是索引前导列且是覆盖索引，
+ *    `ORDER BY next_fetch_at, id` 与索引顺序一致，`LIMIT` 仍可提前结束。
+ *    记录在此以免将来有人看到 `type=index` 时误以为是缺索引。
  */
 export type DueSourcesFilter = {
   enabled: true;
