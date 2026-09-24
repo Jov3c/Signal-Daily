@@ -25,7 +25,11 @@ import {
   type SourceRepository,
   type UpdateSourceInput,
 } from './repository';
-import { SOURCE_FETCH_ENQUEUER, type EnqueuedSourceFetch, type SourceFetchEnqueuer } from './source-enqueuer';
+import {
+  SOURCE_FETCH_ENQUEUER,
+  type EnqueuedSourceFetch,
+  type SourceFetchEnqueuer,
+} from './source-enqueuer';
 import { SOURCE_TESTER, type SourceTestResult, type SourceTester } from './source-tester';
 import { buildSourceConfig } from './source-config.schema';
 import { computeNextFetchAt } from './scheduling';

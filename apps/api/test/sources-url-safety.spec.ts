@@ -217,7 +217,9 @@ describe('URL 校验 —— 正常的公网来源必须放行（对照组）', (
   });
 
   it('返回的是**归一化后**的 URL（调用方应当拿它去连接）', () => {
-    expect(assertSafeSourceUrl('HTTP://EXAMPLE.COM/Feed').toString()).toBe('http://example.com/Feed');
+    expect(assertSafeSourceUrl('HTTP://EXAMPLE.COM/Feed').toString()).toBe(
+      'http://example.com/Feed',
+    );
   });
 });
 
@@ -578,7 +580,10 @@ describe('safeFetchText —— 重定向必须逐跳重新校验（docs/06）', 
     const fetchImpl = async (): Promise<Response> => {
       hop += 1;
       if (hop === 1) {
-        return new Response(null, { status: 301, headers: { location: 'https://a.example/1?x=1' } });
+        return new Response(null, {
+          status: 301,
+          headers: { location: 'https://a.example/1?x=1' },
+        });
       }
       if (hop === 2) {
         return new Response(null, { status: 302, headers: { location: 'https://b.example/2' } });
@@ -679,7 +684,11 @@ describe('safeFetchText —— 超时与体积上限', () => {
       safeFetchText(
         'https://feed.example/rss',
         { timeoutMs: 1000, maxBytes: 100 },
-        { lookup: ALLOW_ALL_DNS, fetchImpl: fetchImpl as unknown as typeof fetch, now: () => clock },
+        {
+          lookup: ALLOW_ALL_DNS,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          now: () => clock,
+        },
       ),
     ).rejects.toMatchObject({ reason: 'TIMEOUT' });
 
@@ -816,7 +825,10 @@ describe('safeFetchText —— 跨主机重定向不得带走敏感头（独立�
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
       seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
       if (seen.length === 1) {
-        return new Response(null, { status: 302, headers: { location: 'https://other.example/x' } });
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://other.example/x' },
+        });
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof fetch;
@@ -915,7 +927,9 @@ describe('charsetOf', () => {
 
 describe('decodeChunks', () => {
   it('未知 charset 回退 utf-8，不抛错', () => {
-    expect(decodeChunks([new Uint8Array([0x68, 0x69])], 'text/plain; charset=x-unknown')).toBe('hi');
+    expect(decodeChunks([new Uint8Array([0x68, 0x69])], 'text/plain; charset=x-unknown')).toBe(
+      'hi',
+    );
   });
 });
 

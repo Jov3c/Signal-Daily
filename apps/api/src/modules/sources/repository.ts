@@ -176,8 +176,6 @@ export interface SourceRepository {
 /** 唯一的 slug 冲突错误（Prisma P2002）。 */
 export function isUniqueViolation(error: unknown): boolean {
   return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: unknown }).code === 'P2002'
+    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002'
   );
 }

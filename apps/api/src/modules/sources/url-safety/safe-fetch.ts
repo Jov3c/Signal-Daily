@@ -26,7 +26,12 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { isBlockedIpAddress } from './ip';
-import { UrlSafetyError, assertSafeSourceUrl, normalizeHostname, redactUrlForDisplay } from './url-safety';
+import {
+  UrlSafetyError,
+  assertSafeSourceUrl,
+  normalizeHostname,
+  redactUrlForDisplay,
+} from './url-safety';
 
 /** DNS 解析结果（只保留我们需要的字段）。 */
 export type DnsAddress = { address: string; family: number };
@@ -172,11 +177,9 @@ export async function assertHostResolvesToPublicAddress(
   try {
     addresses = await lookup(host);
   } catch (error) {
-    throw new SourceFetchError(
-      'DNS_RESOLUTION_FAILED',
-      'Source host could not be resolved',
-      { cause: error },
-    );
+    throw new SourceFetchError('DNS_RESOLUTION_FAILED', 'Source host could not be resolved', {
+      cause: error,
+    });
   }
 
   if (addresses.length === 0) {
@@ -324,11 +327,9 @@ export async function safeFetchText(
         );
       }
       if (hop >= maxRedirects) {
-        throw new SourceFetchError(
-          'TOO_MANY_REDIRECTS',
-          'Source redirected too many times',
-          { status: response.status },
-        );
+        throw new SourceFetchError('TOO_MANY_REDIRECTS', 'Source redirected too many times', {
+          status: response.status,
+        });
       }
 
       // ★ 重新校验下一跳：先解析成绝对地址，再走一遍完整的语法 + 主机校验。
@@ -342,11 +343,10 @@ export async function safeFetchText(
       try {
         next = new URL(location, current);
       } catch (error) {
-        throw new SourceFetchError(
-          'INVALID_REDIRECT',
-          'Source redirected to an unparseable URL',
-          { status: response.status, cause: error },
-        );
+        throw new SourceFetchError('INVALID_REDIRECT', 'Source redirected to an unparseable URL', {
+          status: response.status,
+          cause: error,
+        });
       }
 
       const validated = assertSafeSourceUrl(next.toString());

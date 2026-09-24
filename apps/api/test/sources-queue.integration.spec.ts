@@ -133,7 +133,8 @@ async function createSource(): Promise<string> {
       feedUrl: 'https://example.com/feed.xml',
     }),
   });
-  if (response.status !== 201) throw new Error(`建源失败：${response.status} ${await response.text()}`);
+  if (response.status !== 201)
+    throw new Error(`建源失败：${response.status} ${await response.text()}`);
   return ((await response.json()) as { data: { id: string } }).data.id;
 }
 
@@ -291,10 +292,7 @@ describe('Redis 不可用时的行为', () => {
     });
 
     // 关闭也不能被无限重试卡住。
-    await Promise.race([
-      enqueuer.close(),
-      new Promise((resolve) => setTimeout(resolve, 2_000)),
-    ]);
+    await Promise.race([enqueuer.close(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
   }, 20_000);
 
   it('对照组：同样的构造方式换成可用的 Redis 必须成功', async () => {

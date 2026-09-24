@@ -219,7 +219,13 @@ describe('Admin Source Registry —— CRUD', () => {
   it('列表：分页元数据与过滤参数', async () => {
     await create(RSS_BODY);
     await create(X_BODY);
-    await create({ ...X_BODY, slug: 'x-simonw', name: 'Simon Willison', externalId: 'simonw', config: { handle: 'simonw' } });
+    await create({
+      ...X_BODY,
+      slug: 'x-simonw',
+      name: 'Simon Willison',
+      externalId: 'simonw',
+      config: { handle: 'simonw' },
+    });
 
     const all = await app.request('/api/v1/admin/sources?page=1&pageSize=2', { cookie });
     expect(all.status).toBe(200);

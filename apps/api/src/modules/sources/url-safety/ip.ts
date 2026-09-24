@@ -137,7 +137,11 @@ export function parseIpv6ToBytes(input: string): Ipv6Bytes | null {
     const octets = parseIpv4Bytes(last);
     if (octets === null) return null;
     const [a, b, c, d] = octets;
-    return [...groups.slice(0, -1), (((a << 8) | b) >>> 0).toString(16), (((c << 8) | d) >>> 0).toString(16)];
+    return [
+      ...groups.slice(0, -1),
+      (((a << 8) | b) >>> 0).toString(16),
+      (((c << 8) | d) >>> 0).toString(16),
+    ];
   };
 
   const headGroupsRaw = head === '' ? [] : head.split(':');
@@ -225,11 +229,7 @@ const BLOCKED_IPV4_CIDRS: readonly (readonly [Ipv4Bytes, number])[] = [
 ];
 
 /** 字节前缀匹配（`bits` 可以不是 8 的倍数）。 */
-function matchesPrefix(
-  bytes: readonly number[],
-  prefix: readonly number[],
-  bits: number,
-): boolean {
+function matchesPrefix(bytes: readonly number[], prefix: readonly number[], bits: number): boolean {
   const fullBytes = Math.floor(bits / 8);
   for (let i = 0; i < fullBytes; i += 1) {
     if ((bytes[i] ?? 0) !== (prefix[i] ?? 0)) return false;
@@ -245,7 +245,7 @@ export function isBlockedIpv4(bytes: Ipv4Bytes): boolean {
   const value = ipv4ToInt(bytes);
   for (const [base, prefix] of BLOCKED_IPV4_CIDRS) {
     const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
-    if (((value & mask) >>> 0) === ((ipv4ToInt(base) & mask) >>> 0)) return true;
+    if ((value & mask) >>> 0 === (ipv4ToInt(base) & mask) >>> 0) return true;
   }
   return false;
 }

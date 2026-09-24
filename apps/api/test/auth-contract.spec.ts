@@ -263,7 +263,7 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
   it('残留缺口有记录：常量与模板字符串写法读不到（提醒将来修）', () => {
     // 这条**不是在断言「这是对的」**，而是把已知缺口钉在测试里，
     // 免得将来有人以为守卫覆盖了所有写法。
-    expect(ADMIN_CONTROLLER_PATTERN.test("@Controller(ADMIN_SOURCES)")).toBe(false);
+    expect(ADMIN_CONTROLLER_PATTERN.test('@Controller(ADMIN_SOURCES)')).toBe(false);
     expect(ADMIN_CONTROLLER_PATTERN.test('@Controller(`admin/sources`)')).toBe(false);
   });
 

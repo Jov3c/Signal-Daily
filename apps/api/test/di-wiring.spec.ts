@@ -105,7 +105,9 @@ function declaredTypeAliases(files: SourceFile[]): Set<string> {
   for (const file of files) {
     // 必须要求 `type X = …`（结尾有 `=`）—— 只匹配 `type X` 的话，
     // 跨行 import 里的 `  type SourceRepository,` 也会被误当成别名声明。
-    for (const match of file.code.matchAll(/^\s*(?:export\s+)?type\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\s*=/gm)) {
+    for (const match of file.code.matchAll(
+      /^\s*(?:export\s+)?type\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\s*=/gm,
+    )) {
       const name = match[1];
       if (name !== undefined) names.add(name);
     }

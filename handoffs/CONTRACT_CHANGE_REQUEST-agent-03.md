@@ -23,11 +23,11 @@
 而 `docs/06` 与 `docs/19` 要求 **Agent 04（Collectors）+ Scheduler** 复用
 Source Registry 的三样东西：
 
-| 需要复用的东西 | 本模块的位置 | 为什么必须是同一份 |
-| --- | --- | --- |
-| SSRF / URL 安全校验 | `apps/api/src/modules/sources/url-safety/` | `docs/06` 明令「对 redirect 重新校验」。两份实现必然漂移，最终等于没有防护 |
-| 「什么算到期」的查询规则 | `apps/api/src/modules/sources/scheduling.ts` | 各写一份的结果是「后台显示已停用，worker 还在抓」——线上极难排查 |
-| 每种 `SourceType` 的 `config` 形状 | `apps/api/src/modules/sources/source-config.schema.ts` | 采集器读的就是这份 JSON；两边默认值假设不一致 → 采集行为静默变化 |
+| 需要复用的东西                     | 本模块的位置                                           | 为什么必须是同一份                                                         |
+| ---------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------- |
+| SSRF / URL 安全校验                | `apps/api/src/modules/sources/url-safety/`             | `docs/06` 明令「对 redirect 重新校验」。两份实现必然漂移，最终等于没有防护 |
+| 「什么算到期」的查询规则           | `apps/api/src/modules/sources/scheduling.ts`           | 各写一份的结果是「后台显示已停用，worker 还在抓」——线上极难排查            |
+| 每种 `SourceType` 的 `config` 形状 | `apps/api/src/modules/sources/source-config.schema.ts` | 采集器读的就是这份 JSON；两边默认值假设不一致 → 采集行为静默变化           |
 
 但我的允许修改范围**只有** `apps/api/src/modules/sources/**`。
 `apps/worker` 直接 `import` `apps/api/...` 会把 Nest / Express 整条依赖树
@@ -89,9 +89,9 @@ Agent 04 的 Worker 必须消费它 —— 两边对不上就是一个静默失�
 
 ```jsonc
 {
-  "sourceId": "123",              // BIGINT → string（docs/02）
-  "trigger": "manual",            // "manual"（管理员手动）| "schedule"（调度器到期）
-  "requestedAt": "2026-09-24T01:00:56.616Z"  // ISO 8601 UTC
+  "sourceId": "123", // BIGINT → string（docs/02）
+  "trigger": "manual", // "manual"（管理员手动）| "schedule"（调度器到期）
+  "requestedAt": "2026-09-24T01:00:56.616Z", // ISO 8601 UTC
 }
 ```
 
@@ -137,8 +137,15 @@ None
 **`test`** → **HTTP 200**，成功与失败都 200：
 
 ```jsonc
-{ "data": { "ok": false, "type": "RSS", "target": "https://example.com/feed",
-            "latencyMs": 412, "message": "Target responded with HTTP 404" } }
+{
+  "data": {
+    "ok": false,
+    "type": "RSS",
+    "target": "https://example.com/feed",
+    "latencyMs": 412,
+    "message": "Target responded with HTTP 404",
+  },
+}
 ```
 
 「目标站点连不上」是这次探测的**结论**，不是请求本身出错 —— 所以不报 4xx/5xx。
@@ -147,8 +154,14 @@ None
 **`fetch-now`** → **HTTP 202 Accepted**：
 
 ```jsonc
-{ "data": { "queue": "collector", "jobName": "collector.fetch-source",
-            "jobId": "collector:123:29836860", "window": "29836860" } }
+{
+  "data": {
+    "queue": "collector",
+    "jobName": "collector.fetch-source",
+    "jobId": "collector:123:29836860",
+    "window": "29836860",
+  },
+}
 ```
 
 202 是「已受理、异步执行」的标准语义。Redis 不可用时 **503 `SOURCE_ENQUEUE_FAILED`**
@@ -188,11 +201,11 @@ None
 
 在 `docs/03`（或 `docs/06`）里写明：
 
-| 字段 | 范围 | 理由 |
-| --- | --- | --- |
-| `priority` | `0–100` 整数 | 编辑权重，0–100 是一眼能懂的量纲（seed 数据是 80–95） |
-| `trustScore` | `0–10`，**最多一位小数** | 列是 `DECIMAL(4,1)`，多出来的精度会被 MySQL **静默舍入** |
-| `fetchIntervalSeconds` | `60–604800` 整数 | 下限是 `docs/06` 的调度精度（每分钟一轮），上限 7 天 |
+| 字段                   | 范围                     | 理由                                                     |
+| ---------------------- | ------------------------ | -------------------------------------------------------- |
+| `priority`             | `0–100` 整数             | 编辑权重，0–100 是一眼能懂的量纲（seed 数据是 80–95）    |
+| `trustScore`           | `0–10`，**最多一位小数** | 列是 `DECIMAL(4,1)`，多出来的精度会被 MySQL **静默舍入** |
+| `fetchIntervalSeconds` | `60–604800` 整数         | 下限是 `docs/06` 的调度精度（每分钟一轮），上限 7 天     |
 
 ### Reason
 
@@ -272,21 +285,21 @@ None
 
 把下表写进 `docs/06`（或新建 `docs/24-source-config.md`）：
 
-| `type` | config 键 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `RSS` | `maxItems` | `50`（1–500） | `feedUrl` 存在 `sources.feed_url` **列**上，不进 config |
-| `X_USER` | `handle` | — **必填** | 1–15 位 `A-Za-z0-9_` |
-| | `includeQuotes` | `true` | `docs/06`：可选 Quote Post |
-| | `includeReplies` | `false` | `docs/06`：默认排除 Reply |
-| | `includeReposts` | `false` | `docs/06`：默认排除纯 Repost |
-| `GITHUB_REPO` | `repo` | — 必填（或 `externalId`） | `owner/name` |
-| | `includeReleases` | `true` | |
-| `HACKER_NEWS` | `feed` | `top` | 枚举 `top｜new｜best｜ask｜show｜job` |
-| | `minScore` | `0`（0–10000） | |
-| `HUGGINGFACE` | `repoType` | `model` | 枚举 `model｜dataset｜space` |
-| | `repoId` | — 必填（或 `externalId`） | `owner/name` |
-| `MANUAL_URL` | `url` | — **必填** | 抓取目标，经 SSRF 校验 |
-| | `note` | 无 | ≤500 字符 |
+| `type`        | config 键         | 默认值                    | 说明                                                    |
+| ------------- | ----------------- | ------------------------- | ------------------------------------------------------- |
+| `RSS`         | `maxItems`        | `50`（1–500）             | `feedUrl` 存在 `sources.feed_url` **列**上，不进 config |
+| `X_USER`      | `handle`          | — **必填**                | 1–15 位 `A-Za-z0-9_`                                    |
+|               | `includeQuotes`   | `true`                    | `docs/06`：可选 Quote Post                              |
+|               | `includeReplies`  | `false`                   | `docs/06`：默认排除 Reply                               |
+|               | `includeReposts`  | `false`                   | `docs/06`：默认排除纯 Repost                            |
+| `GITHUB_REPO` | `repo`            | — 必填（或 `externalId`） | `owner/name`                                            |
+|               | `includeReleases` | `true`                    |                                                         |
+| `HACKER_NEWS` | `feed`            | `top`                     | 枚举 `top｜new｜best｜ask｜show｜job`                   |
+|               | `minScore`        | `0`（0–10000）            |                                                         |
+| `HUGGINGFACE` | `repoType`        | `model`                   | 枚举 `model｜dataset｜space`                            |
+|               | `repoId`          | — 必填（或 `externalId`） | `owner/name`                                            |
+| `MANUAL_URL`  | `url`             | — **必填**                | 抓取目标，经 SSRF 校验                                  |
+|               | `note`            | 无                        | ≤500 字符                                               |
 
 另外两条实现约定：
 
@@ -380,3 +393,148 @@ Agent 07 / 12 / 14、Agent 11（部署时的 `APP_BASE_URL` 必须与实际访�
   与既有的 `SOURCE_NOT_FOUND` / `RATE_LIMITED` 等无同义冲突。
 - **未新增 Queue / Job 名**：只用 `collector` / `collector.fetch-source`。
 - **未引入订阅语义**（规则 §13）。
+
+---
+
+# 追加（2026-09-24，§23 独立审查之后）
+
+> 两轮独立审查（安全向 / 工程向）结束后补记。上面 7 项仍然有效，
+> 以下 3 项是审查过程中新发现的、需要 Owner 裁决或知悉的事项。
+
+## 8. `common/prisma/bigint-id.ts` 缺少 BIGINT 上界校验（**属 Agent 02 的文件，我未越界修改**）
+
+### Current Problem
+
+`toBigIntId()` 的正则是 `/^\d{1,20}$/` —— 只校验「20 位以内的十进制数字」，
+**没有上界**。而 `sources.id` 是 `BIGINT UNSIGNED`。
+
+实测（真库 + 真 Prisma，复现脚本 `work/_agent03/repro-bigint-bound.mjs`）：
+
+```
+99999999999999999999   -> THROW PrismaClientUnknownRequestError
+18446744073709551615   -> THROW PrismaClientUnknownRequestError   ← 连合法上限都炸
+18446744073709551616   -> THROW PrismaClientUnknownRequestError
+```
+
+原因是 Prisma 把 JS `bigint` 按**有符号** 64 位绑定，装不下无符号段的上半部分。
+
+**后果**：`GET /api/v1/admin/sources/18446744073709551615` 返回 **500 而不是 404**，
+污染 `docs/15` 的 5xx 告警链路。8 条带 `:id` 的路由都受影响
+（需要 ADMIN 身份，所以不是越权，是可用性与契约问题）。
+
+### Requested Change
+
+给 `toBigIntId()` 加上界（超界返回 `null` → 调用方走 404）：
+
+```ts
+const MAX_BINDABLE_ID = 9_223_372_036_854_775_807n; // Int64 max
+export function toBigIntId(value: string): bigint | null {
+  if (!BIGINT_ID_PATTERN.test(value)) return null;
+  const id = BigInt(value);
+  return id > MAX_BINDABLE_ID ? null : id;
+}
+```
+
+### Reason
+
+这是**所有**用到 BIGINT id 的模块共有的边界（03 / 07 / 08 / 09 / 10），
+修一处即可全覆盖。修复者应是 Agent 02（文件 Owner）或 Agent 14。
+
+### Compatibility
+
+收紧。任何合法且实际存在的 id（自增从 1 开始）都不受影响。
+
+### Database Impact
+
+None
+
+### API Impact
+
+超界 id 从 500 变为 404。**这是修复，不是破坏性变更。**
+
+### Downstream Impact
+
+Agent 07 / 08 / 09 / 10 —— 在 Owner 修好之前，请像本模块一样在自己的边界再收一次
+（本模块的做法见 `repository.ts` 的 `toSourceId` / `MAX_BINDABLE_ID`）。
+
+### 我在裁决之前做了什么
+
+**没有修改那个文件**（它在 Agent 02 的交付范围内，规则 §9 禁止顺手改别人的模块）。
+改为在本模块边界收一次：`apps/api/src/modules/sources/repository.ts` 的
+`toSourceId()`。真库回归守卫已加在 `sources-db.integration.spec.ts`（含反证）。
+
+---
+
+## 9. `fetch-now` 被幂等去重时，响应无法与「真正入队」区分
+
+### Current Problem
+
+BullMQ 按 `jobId` 去重。同一分钟内重复调用 `fetch-now`，
+**第二次也会返回 202 + 同一个 jobId，但什么都不会执行**。
+若那次任务已经完成（`removeOnComplete: { age: 3600 }` 让它还在 Redis 里），
+同样会返回 202 而不执行。
+
+对 Agent 12 的 Admin UI 来说，「已排队」与「被去重」在响应上完全一样。
+
+### Requested Change
+
+二选一：
+
+- 在响应体里带上 `deduplicated: boolean`（实现上判断 jobId 是否已存在），
+  UI 据此区分文案；或
+- 在 `docs/04` 里**明确写出**：「同一幂等窗口内的重复请求返回相同 jobId，
+  不保证再次执行」——让 UI 不要说「已排队」。
+
+### Reason
+
+管理员点两次「立即抓取」看到两次成功，可能误以为排了两次队。
+
+### Compatibility
+
+新增字段（向后兼容）。
+
+### Database Impact
+
+None
+
+### API Impact
+
+`POST /admin/sources/:id/fetch-now` 的响应体。
+
+### Downstream Impact
+
+**Agent 12**（Admin UI 文案）。
+
+### 我在裁决之前做了什么
+
+保持现状（返回 202 + jobId），但已把这条语义写进 HANDOFF 的
+「Integration Notes → 给 Agent 12」，避免它被当成「排队了两次」。
+
+---
+
+## 10. 本次交付中**超出允许目录**的改动清单（供 Agent 14 集成时核对）
+
+`tasks/agent-03-sources.md` 的允许范围是 `apps/api/src/modules/sources/**`。
+实际改动另有 5 个文件，**逐条列在这里**，以免集成时看不到
+（两轮审查都指出：只写在代码注释里不够）。
+
+| 文件                                  | 改动                                                         | 为什么必要                                                                                        | 删除行数 |
+| ------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------- |
+| `packages/contracts/src/errors.ts`    | 追加 4 个 `SOURCE_*` 业务码                                  | 规则要求业务码必须登记在契约里，不允许散落在模块内                                                | **0**    |
+| `apps/api/test/auth-contract.spec.ts` | admin 路由围栏改为「登记过的所有者白名单」+ 补真有牙齿的反证 | 原围栏断言「`modules/**` 一律不许有 admin 路由」，而 `docs/04` 的 `/admin/sources` 属 Agent 03    | 0        |
+| `apps/api/test/di-wiring.spec.ts`     | 排除 `type X = …` 字符串联合别名                             | 该守卫按「首字母大写」启发式判定 DI 参数，`UrlSafetyReason` 这类别名被误报                        | 0        |
+| `apps/api/package.json`               | `+ bullmq@5.81.5`                                            | `fetch-now` 必须真的入队（`docs/13` 的 `collector` 队列）。`ioredis` 是 Agent 02 已有的直接依赖   | 0        |
+| `pnpm-workspace.yaml`                 | `+ msgpackr-extract: false`                                  | BullMQ → msgpackr 的**可选**原生加速器；关闭后 msgpackr 回退纯 JS，避免部署机需要 node-gyp 工具链 | 0        |
+
+**零改动**（已用 `git diff` 确认）：`prisma/**`、`apps/api/src/app.module.ts`、
+`bootstrap.ts`、`main.ts`、`apps/worker/**`、`apps/web/**`、根 `package.json`、`eslint.config.mjs`。
+
+**未实现任何其他 Agent 的职责**：没有采集（04）、没有审核/证据（05/07）、
+没有发布（08）、没有用户功能（09）、没有公开 API（10）。
+`apps/worker` 也**没有** import `apps/api`（无架构倒退）。
+
+### Requested Change
+
+若 Owner 认为其中某项应当走别的路径，请指出；否则请在 `docs/18` 的文件所有权
+一节里补一句「测试守卫的维护：被守卫约束的模块 Owner 可以就地修正误报，
+但必须在 HANDOFF 与 CCR 里显式记录改动」——本次两轮审查都独立提出了这一点。

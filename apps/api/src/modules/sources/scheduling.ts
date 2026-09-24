@@ -130,10 +130,7 @@ export function buildDueSourcesWhere(now: Date): DueSourcesFilter {
  * 反复插队，把 `nextFetchAt` 早的来源饿死 —— 而 `nextFetchAt` 的语义
  * 就是「该轮到它了」。
  */
-export const DUE_SOURCES_ORDER_BY = [
-  { nextFetchAt: 'asc' },
-  { id: 'asc' },
-] as const;
+export const DUE_SOURCES_ORDER_BY = [{ nextFetchAt: 'asc' }, { id: 'asc' }] as const;
 
 /** 这条查询依赖的索引，写在这里以便和 Agent 01 的 schema 对齐。 */
 export const DUE_SOURCES_INDEX = 'sources(enabled, next_fetch_at)';

@@ -20,12 +20,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { SourceType } from '@signal/contracts';
 import { serializeError, type Logger } from '@signal/logger';
 import { APP_LOGGER } from '../../common/logger/app-logger';
-import {
-  SourceFetchError,
-  UrlSafetyError,
-  type DnsLookup,
-  safeFetchText,
-} from './url-safety';
+import { SourceFetchError, UrlSafetyError, type DnsLookup, safeFetchText } from './url-safety';
 import type { SourceRecord } from './repository';
 import { SOURCE_CONFIG, type SourceConfig } from './source.config';
 import {
@@ -229,11 +224,7 @@ export class HttpSourceTester implements SourceTester {
       case SourceType.HUGGINGFACE: {
         const repoId = source.externalId ?? configString(source.config, 'repoId', '');
         if (repoId === '') throw new Error('HUGGINGFACE source has no repository');
-        const repoType = configString(
-          source.config,
-          'repoType',
-          'model',
-        ) as HuggingFaceRepoType;
+        const repoType = configString(source.config, 'repoType', 'model') as HuggingFaceRepoType;
         const segment = HF_SEGMENT[repoType] ?? HF_SEGMENT.model;
         return `${HUGGINGFACE_API}/${segment}/${repoId}`;
       }
@@ -266,10 +257,14 @@ export class HttpSourceTester implements SourceTester {
       case SourceType.RSS:
         return {
           method: 'GET',
-          headers: { accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
+          headers: {
+            accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
+          },
           successMessage: 'Feed responded and looks like RSS/Atom',
           verdict: (body, contentType) =>
-            looksLikeFeed(body, contentType) ? null : 'Target responded but does not look like an RSS/Atom feed',
+            looksLikeFeed(body, contentType)
+              ? null
+              : 'Target responded but does not look like an RSS/Atom feed',
         };
 
       case SourceType.MANUAL_URL:

@@ -255,12 +255,13 @@ describe('GITHUB_REPO / HUGGINGFACE', () => {
     expectConfigInvalid(SourceType.GITHUB_REPO, {});
   });
 
-  it.each([['没有斜杠', 'vllm'], ['三段', 'a/b/c'], ['尾部斜杠', 'a/']])(
-    'GITHUB_REPO 形状 %s → 拒绝',
-    (_label, repo) => {
-      expectConfigInvalid(SourceType.GITHUB_REPO, { repo });
-    },
-  );
+  it.each([
+    ['没有斜杠', 'vllm'],
+    ['三段', 'a/b/c'],
+    ['尾部斜杠', 'a/'],
+  ])('GITHUB_REPO 形状 %s → 拒绝', (_label, repo) => {
+    expectConfigInvalid(SourceType.GITHUB_REPO, { repo });
+  });
 
   it('HUGGINGFACE 的 repoType 决定 API 段，且默认 model', () => {
     expect(build(SourceType.HUGGINGFACE, { repoId: 'meta-llama/Llama-3' }).config.repoType).toBe(
@@ -278,12 +279,9 @@ describe('HACKER_NEWS', () => {
     expect(build(SourceType.HACKER_NEWS, {}).config).toEqual({ feed: 'top', minScore: 0 });
   });
 
-  it.each([['top'], ['new'], ['best'], ['ask'], ['show'], ['job']])(
-    '内置榜单 %s 合法',
-    (feed) => {
-      expect(build(SourceType.HACKER_NEWS, { feed }).config.feed).toBe(feed);
-    },
-  );
+  it.each([['top'], ['new'], ['best'], ['ask'], ['show'], ['job']])('内置榜单 %s 合法', (feed) => {
+    expect(build(SourceType.HACKER_NEWS, { feed }).config.feed).toBe(feed);
+  });
 
   it('非内置榜单 → 拒绝', () => {
     expectConfigInvalid(SourceType.HACKER_NEWS, { feed: 'trending' });
@@ -307,9 +305,9 @@ describe('MANUAL_URL', () => {
   });
 
   it('note 可选且限长 500', () => {
-    expect(build(SourceType.MANUAL_URL, { url: 'https://example.com', note: 'hi' }).config.note).toBe(
-      'hi',
-    );
+    expect(
+      build(SourceType.MANUAL_URL, { url: 'https://example.com', note: 'hi' }).config.note,
+    ).toBe('hi');
     expectConfigInvalid(SourceType.MANUAL_URL, {
       url: 'https://example.com',
       note: 'x'.repeat(501),
@@ -348,9 +346,9 @@ describe('通用规则', () => {
   });
 
   it('baseUrl 会被 SSRF 校验（所有类型，纵深防御）', () => {
-    expect(() =>
-      build(SourceType.HACKER_NEWS, {}, { baseUrl: 'http://192.168.0.1/' }),
-    ).toThrow(UrlSafetyError);
+    expect(() => build(SourceType.HACKER_NEWS, {}, { baseUrl: 'http://192.168.0.1/' })).toThrow(
+      UrlSafetyError,
+    );
   });
 
   it('每种 SourceType 都有对应分支，且都能被正常校验通过', () => {

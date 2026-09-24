@@ -52,11 +52,7 @@ import {
   InMemoryUserRepository,
   createTestAuthConfig,
 } from './support/fakes';
-import {
-  FakeSourceClock,
-  FakeSourceFetchEnqueuer,
-  FakeSourceTester,
-} from './support/source-fakes';
+import { FakeSourceClock, FakeSourceFetchEnqueuer, FakeSourceTester } from './support/source-fakes';
 import { createTestSourceConfig } from './support/sources-test-app';
 import { cookieHeader, setCookies } from './support/test-app';
 import type { INestApplication } from '@nestjs/common';
@@ -147,7 +143,9 @@ beforeAll(async () => {
     .overrideProvider(GITHUB_CLIENT)
     .useValue(new FakeGithubClient(true))
     .overrideProvider(APP_LOGGER)
-    .useValue(createLogger({ service: 'api-it', level: 'silent', destination: createMemoryStream() }))
+    .useValue(
+      createLogger({ service: 'api-it', level: 'silent', destination: createMemoryStream() }),
+    )
     .overrideProvider(REDIS_CLIENT)
     .useValue({ eval: async () => [1, 1000], quit: async () => 'OK' })
     .compile();
@@ -267,9 +265,18 @@ describe('真实 MySQL —— 存储形态', () => {
 
   it('slug 唯一索引真的生效，且被翻译成 409 而不是 500', async () => {
     const slug = nextSlug();
-    const body = { name: 'dup', slug, type: 'RSS', kind: 'MEDIA', feedUrl: 'https://example.com/f' };
+    const body = {
+      name: 'dup',
+      slug,
+      type: 'RSS',
+      kind: 'MEDIA',
+      feedUrl: 'https://example.com/f',
+    };
 
-    expect((await request('/api/v1/admin/sources', { method: 'POST', body: JSON.stringify(body) })).status).toBe(201);
+    expect(
+      (await request('/api/v1/admin/sources', { method: 'POST', body: JSON.stringify(body) }))
+        .status,
+    ).toBe(201);
     const second = await request('/api/v1/admin/sources', {
       method: 'POST',
       body: JSON.stringify({ ...body, name: 'dup2' }),

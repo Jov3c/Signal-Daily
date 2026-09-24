@@ -418,7 +418,10 @@ function validateHuggingFace(
 }
 
 /** 管理员手工指定的单个 URL。抓取目标就在 config 里，且必须有。 */
-function validateManualUrl(raw: Record<string, unknown>, shared: SharedInput): ValidatedSourceConfig {
+function validateManualUrl(
+  raw: Record<string, unknown>,
+  shared: SharedInput,
+): ValidatedSourceConfig {
   const type = SourceType.MANUAL_URL;
   rejectUnknownKeys(type, raw, ['url', 'note']);
 
@@ -441,4 +444,3 @@ function validateManualUrl(raw: Record<string, unknown>, shared: SharedInput): V
     baseUrl: shared.baseUrl,
   };
 }
-

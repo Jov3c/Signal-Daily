@@ -21,13 +21,16 @@ import type {
   SourceRepository,
   UpdateSourceInput,
 } from '../../src/modules/sources/repository';
-import {
-  buildDueSourcesWhere,
-  type DueSourcesFilter,
-} from '../../src/modules/sources/scheduling';
-import type { EnqueuedSourceFetch, SourceFetchEnqueuer } from '../../src/modules/sources/source-enqueuer';
+import { buildDueSourcesWhere, type DueSourcesFilter } from '../../src/modules/sources/scheduling';
+import type {
+  EnqueuedSourceFetch,
+  SourceFetchEnqueuer,
+} from '../../src/modules/sources/source-enqueuer';
 import { JobId, JobName, QueueName } from '@signal/contracts';
-import { fetchWindow, type CollectorFetchSourcePayload } from '../../src/modules/sources/source-enqueuer';
+import {
+  fetchWindow,
+  type CollectorFetchSourcePayload,
+} from '../../src/modules/sources/source-enqueuer';
 import type { SourceClock } from '../../src/modules/sources/clock';
 import type { SourceTestResult, SourceTester } from '../../src/modules/sources/source-tester';
 

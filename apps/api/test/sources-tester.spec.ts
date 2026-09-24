@@ -14,7 +14,11 @@
 import { describe, expect, it } from 'vitest';
 import { SourceKind, SourceTier, SourceType } from '@signal/contracts';
 import { createLogger } from '@signal/logger';
-import { HttpSourceTester, TEST_MAX_BYTES, looksLikeFeed } from '../src/modules/sources/source-tester';
+import {
+  HttpSourceTester,
+  TEST_MAX_BYTES,
+  looksLikeFeed,
+} from '../src/modules/sources/source-tester';
 import type { SourceRecord } from '../src/modules/sources/repository';
 import { createTestSourceConfig } from './support/sources-test-app';
 import type { DnsAddress } from '../src/modules/sources/url-safety';
@@ -54,7 +58,11 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
 /** 构造一个 tester，网络层由调用方提供。 */
 function tester(
   fetchImpl: typeof fetch,
-  options: { xApiBearerToken?: string | null; githubToken?: string | null; lookup?: typeof PUBLIC_DNS } = {},
+  options: {
+    xApiBearerToken?: string | null;
+    githubToken?: string | null;
+    lookup?: typeof PUBLIC_DNS;
+  } = {},
 ) {
   return new HttpSourceTester(
     createTestSourceConfig({
@@ -78,7 +86,8 @@ function stubFetch(response: Response | (() => Response)) {
   return { impl, calls };
 }
 
-const FEED_XML = '<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>';
+const FEED_XML =
+  '<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>';
 
 /* ------------------------------------------------------------------ */
 /* RSS                                                                 */

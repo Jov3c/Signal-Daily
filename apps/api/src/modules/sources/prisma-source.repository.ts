@@ -69,7 +69,9 @@ function toConfigRecord(value: Prisma.JsonValue | null): Record<string, unknown>
 }
 
 /** `Json?` 列的可写值。SQL NULL 必须用 `Prisma.DbNull` 表达。 */
-function toDbJson(value: Record<string, unknown> | null | undefined): Prisma.InputJsonValue | typeof Prisma.DbNull | undefined {
+function toDbJson(
+  value: Record<string, unknown> | null | undefined,
+): Prisma.InputJsonValue | typeof Prisma.DbNull | undefined {
   if (value === undefined) return undefined;
   if (value === null) return Prisma.DbNull;
   return value as Prisma.InputJsonValue;

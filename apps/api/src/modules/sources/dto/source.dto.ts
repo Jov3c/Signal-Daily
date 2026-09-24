@@ -296,7 +296,9 @@ export function parseCreateSourceBody(body: unknown): ParseResult<CreateSourceDt
   const type = readEnumField(record.type, 'type', SOURCE_TYPES, errors);
   const kind = readEnumField(record.kind, 'kind', SOURCE_KINDS, errors);
   const tier =
-    record.tier === undefined ? undefined : readEnumField(record.tier, 'tier', SOURCE_TIERS, errors);
+    record.tier === undefined
+      ? undefined
+      : readEnumField(record.tier, 'tier', SOURCE_TIERS, errors);
 
   const official =
     record.official === undefined ? false : readBooleanField(record.official, 'official', errors);
