@@ -121,6 +121,13 @@ export const DomainErrorCode = {
    * 本码只管 `config` 这一个自由结构。
    */
   SOURCE_CONFIG_INVALID: 'SOURCE_CONFIG_INVALID',
+  /**
+   * 采集任务入队失败（BullMQ / Redis 不可用）。
+   *
+   * 语义是「服务暂时不可用、可重试」，因此是 503 而不是 500 ——
+   * Agent 11 看到这个码应当去查 Redis，而不是查业务代码。
+   */
+  SOURCE_ENQUEUE_FAILED: 'SOURCE_ENQUEUE_FAILED',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];

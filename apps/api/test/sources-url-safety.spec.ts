@@ -31,6 +31,7 @@ import {
   redactUrlForDisplay,
   safeFetchText,
   type DnsAddress,
+  type Ipv6Bytes,
 } from '../src/modules/sources/url-safety';
 
 /* ------------------------------------------------------------------ */
@@ -46,6 +47,13 @@ function expectRejected(raw: string, reason: string): void {
     expect(error, `拒绝 ${raw} 时抛出的不是 UrlSafetyError`).toBeInstanceOf(UrlSafetyError);
     expect((error as UrlSafetyError).reason, `拒绝 ${raw} 的原因不符`).toBe(reason);
   }
+}
+
+/** 解析 IPv6；解析不出来直接抛，避免 `?? []` 这种会把断言变成空跑的写法。 */
+function bytesOf(ip: string): Ipv6Bytes {
+  const bytes = parseIpv6ToBytes(ip);
+  if (bytes === null) throw new Error(`解析失败：${ip}`);
+  return bytes;
 }
 
 /** 解析固定地址的 DNS 替身。 */
@@ -305,16 +313,12 @@ describe('IPv6 解析与内嵌 IPv4 解码（直接单测，不经由前缀表�
     ['6to4（内嵌在 2002 之后）', '2002:a00:1::1', [10, 0, 0, 1]],
     ['6to4 内嵌 loopback', '2002:7f00:1::', [127, 0, 0, 1]],
   ])('embeddedIpv4Of 解出 %s 的内嵌地址', (_label, ip, expected) => {
-    const bytes = parseIpv6ToBytes(ip);
-    expect(bytes).not.toBeNull();
-    expect(embeddedIpv4Of(bytes ?? [])).toEqual(expected);
+    expect(embeddedIpv4Of(bytesOf(ip))).toEqual(expected);
   });
 
   it('Teredo 的内嵌 IPv4 按位取反（RFC 4380）', () => {
     // 2001:0000:4136:e378:8000:63bf:3fff:fdd2 里最后 32 位是取反后的客户端 IPv4。
-    const bytes = parseIpv6ToBytes('2001:0000:4136:e378:8000:63bf:3fff:fdd2');
-    expect(bytes).not.toBeNull();
-    expect(embeddedIpv4Of(bytes ?? [])).toEqual([
+    expect(embeddedIpv4Of(bytesOf('2001:0000:4136:e378:8000:63bf:3fff:fdd2'))).toEqual([
       0x3f ^ 0xff,
       0xff ^ 0xff,
       0xfd ^ 0xff,
@@ -323,9 +327,7 @@ describe('IPv6 解析与内嵌 IPv4 解码（直接单测，不经由前缀表�
   });
 
   it('不含内嵌 IPv4 的普通公网地址返回 null', () => {
-    const bytes = parseIpv6ToBytes('2606:4700:4700::1111');
-    expect(bytes).not.toBeNull();
-    expect(embeddedIpv4Of(bytes ?? [])).toBeNull();
+    expect(embeddedIpv4Of(bytesOf('2606:4700:4700::1111'))).toBeNull();
   });
 });
 
@@ -341,11 +343,7 @@ describe('IPv6 解析与内嵌 IPv4 解码（直接单测，不经由前缀表�
  * 只有「恰好还能被内嵌判定兜住」的地址会报错，其余的会静默放行。
  */
 describe('isBlockedIpv6 的白名单语义（不经由内嵌 IPv4 判定）', () => {
-  const blocked = (ip: string): boolean => {
-    const bytes = parseIpv6ToBytes(ip);
-    if (bytes === null) throw new Error(`解析失败：${ip}`);
-    return isBlockedIpv6(bytes);
-  };
+  const blocked = (ip: string): boolean => isBlockedIpv6(bytesOf(ip));
 
   it.each([
     ['loopback `::1` —— 不在 2000::/3 内', '::1'],
