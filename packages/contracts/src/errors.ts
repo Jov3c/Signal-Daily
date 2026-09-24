@@ -128,6 +128,68 @@ export const DomainErrorCode = {
    * Agent 11 看到这个码应当去查 Redis，而不是查业务代码。
    */
   SOURCE_ENQUEUE_FAILED: 'SOURCE_ENQUEUE_FAILED',
+
+  /* ---- Agent 06 — AI Provider / 翻译 / 分类 / 评分（docs/08 / docs/13 / docs/14） ---- */
+
+  /**
+   * `docs/20` 的 AI 配置不完整（缺 `AI_DEFAULT_BASE_URL` 或对应档位的
+   * `AI_MODEL_CHEAP|MEDIUM|STRONG`）。
+   *
+   * **不静默降级**，与 Agent 02 的 `AUTH_MAIL_NOT_CONFIGURED`、
+   * Agent 04 的 `SOURCE_FETCH_CREDENTIALS_MISSING` 同一取舍：
+   * 没配就是跑不了，如实失败，而不是让内容一直拿不到分却显示一切正常。
+   * 不可重试。
+   */
+  AI_NOT_CONFIGURED: 'AI_NOT_CONFIGURED',
+  /**
+   * 上游 AI 以 401 / 403 拒绝我们的凭据。
+   *
+   * 与 Agent 04 的 `SOURCE_FETCH_UNAUTHORIZED` 同一语义，只是主体不同
+   * （AI 端点 vs 采集源）。不可重试 —— 重试同一份坏 key 只会把额度烧光，
+   * 还可能触发上游账号风控。
+   */
+  AI_PROVIDER_UNAUTHORIZED: 'AI_PROVIDER_UNAUTHORIZED',
+  /**
+   * AI 调用的**瞬时**失败：网络错误、超时、429、5xx。
+   *
+   * 与确定性 4xx 共用本码是刻意的：两者的处置动作相同（去看上游状态与请求形状），
+   * 而「要不要重试」由 `AiError.kind` 决定，不需要再用一个错误码区分一次 ——
+   * 契约要求「一个语义只能有一个 code」，而「上游这次没答好」就是一个语义。
+   */
+  AI_REQUEST_FAILED: 'AI_REQUEST_FAILED',
+  /**
+   * 模型答了，但不是约定的结构（非 JSON / 缺字段 / 有多余字段 / 类型不符）。
+   *
+   * `docs/13`：schema invalid 只重试 1 次。
+   * **多余字段也算失败**是刻意的 —— `docs/08` 要求 AI 不能改写 Source Tier、
+   * 不能自称官方，而「模型试图输出这些字段」必须是一次可见的失败，
+   * 不能被静默丢弃（静默丢弃 = 看不见的攻击）。
+   */
+  AI_RESPONSE_INVALID: 'AI_RESPONSE_INVALID',
+  /**
+   * 该 provider / model 不支持这个任务或请求形状（例如端点不认 `response_format`）。
+   *
+   * `docs/13`：unsupported 不 retry。管理员要做的是换模型或换端点。
+   * 也与「本模块尚未实现该任务」共用本码 —— 对看板而言都是「这个任务没跑成，
+   * 而且再试一次也不会成」。
+   */
+  AI_TASK_UNSUPPORTED: 'AI_TASK_UNSUPPORTED',
+  /**
+   * 当日 AI 预算已耗尽（`AI_DAILY_BUDGET_USD`，按 Asia/Shanghai 业务日统计），
+   * 该任务又不是关键任务，因此暂停到次日。
+   *
+   * 不可重试 —— 重试只会继续撞同一堵墙。`docs/08`：
+   * 「预算 80% 告警 / 100% 非关键任务暂停」；内容与低分都不会被删除，
+   * 只是这一轮不做。
+   */
+  AI_BUDGET_EXCEEDED: 'AI_BUDGET_EXCEEDED',
+  /**
+   * 任务载荷里的 `contentId` 在库中不存在。
+   *
+   * 通常是上游传错 id，或内容在入队与执行之间被删掉了。
+   * 不可重试：重试同一个不存在的 id 只会得到同样的结果。
+   */
+  AI_CONTENT_NOT_FOUND: 'AI_CONTENT_NOT_FOUND',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];
