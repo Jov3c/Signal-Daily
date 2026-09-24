@@ -25,8 +25,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { AiRunStatus, AiTaskType, EvidenceType, SourceKind, SourceTier } from '@signal/contracts';
+import {
+  AiRunStatus,
+  AiTaskType,
+  EvidenceType,
+  isValidErrorCode,
+  SourceKind,
+  SourceTier,
+} from '@signal/contracts';
 import { PrismaAiRepository } from '../src/jobs/ai/prisma-ai-run.repository';
+import { toContractEvidenceType } from '../src/jobs/ai/contract-enum';
 
 /**
  * `event_evidence.url_hash` 是 `Char(64)`，约定存 SHA-256 十六进制小写
@@ -240,12 +248,15 @@ describe('AiRun 生命周期（真 SQL）', () => {
     expect(run.durationMs).toBe(1234);
   });
 
-  it('ai_analysis 以 JSON 落库并可读回', async () => {
+  it('ai_analysis 以 JSON 落库并可读回（按任务分区）', async () => {
     const content = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
+    // 结构是 `{ score: {...}, translation: {...} }` —— 见 aiAnalysis 的分区说明。
     expect(content.aiAnalysis).toMatchObject({
-      taskType: 'SCORE',
-      band: 'RECOMMENDED',
-      topics: ['ai-models'],
+      score: {
+        taskType: 'SCORE',
+        band: 'RECOMMENDED',
+        topics: ['ai-models'],
+      },
     });
   });
 
@@ -311,6 +322,16 @@ describe('AiRun 生命周期（真 SQL）', () => {
     const after = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
     expect(after.bodyTranslated).toContain('新的评测报告');
     expect(after.bodyOriginal).toBe(before.bodyOriginal);
+
+    // ⚠ 独立审查 P2 的**真库**回归守卫：翻译任务不得抹掉评分任务写进
+    // `ai_analysis` 的东西。第一版两个分支都整列覆盖，于是
+    // 「先评分再翻译」之后 `dimensions` / `band` / `topics` 全部消失 ——
+    // 而 `ai-service.ts` 里恰好写着「管理员在审核页仍能看到模型当时选了什么」。
+    // 这条在真库上验，是因为它取决于 Prisma 对 Json 列的写入语义。
+    expect(after.aiAnalysis).toMatchObject({
+      score: { band: 'RECOMMENDED', topics: ['ai-models'] },
+      translation: { detectedLanguage: 'en' },
+    });
   });
 });
 
@@ -378,5 +399,104 @@ describe('AI 永不写 sources（真实 SQL 层面确认）', () => {
     expect(source.slug).toBe(SLUG);
     expect(source.name).toBe(`AI IT Source ${SUFFIX}`);
     expect(source.trustScore.toString()).toBe('7'); // 默认值未被 AI 改动
+  });
+});
+
+/**
+ * 独立审查 P2：`docs/08` 的三条硬约束与「收尾与产物同一事务」，
+ * 在仓库自带测试里**只对着内存替身断言过** —— 替身自己实现了一遍
+ * `applyArtifact`，不经过真实现的 `ALLOWED_SCORE_COLUMNS` 与事务。
+ * 把真实现改坏（加 `pipelineStatus`、去掉白名单、去掉事务）时 886 项单测全绿。
+ *
+ * 下面这一组跑在真库上，是那几条不变式的**真实覆盖**。
+ */
+describe('写入范围与事务（真库不变式）', () => {
+  it('一次成功的评分不改动 pipeline_status / body_original', async () => {
+    const before = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
+
+    const aiRunId = await repository.startAiRun({
+      contentId: String(contentId),
+      taskType: AiTaskType.SCORE,
+      provider: 'openai-compatible',
+      model: 'gpt-4o-mini',
+      promptVersion: 'v1',
+    });
+    await repository.finishAiRun({
+      aiRunId,
+      contentId: String(contentId),
+      status: AiRunStatus.SUCCEEDED,
+      inputTokens: 10,
+      outputTokens: 5,
+      estimatedCostUsd: 0.000001,
+      durationMs: 100,
+      errorCode: null,
+      artifact: {
+        kind: 'score',
+        scoreUpdate: { importanceScore: 80, finalScore: 80 },
+        recommendationReason: '范围快照用例',
+        aiAnalysis: { taskType: 'SCORE' },
+      },
+    });
+
+    const after = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
+    // 状态机归 Agent 05 —— AI 一行都不碰
+    expect(after.pipelineStatus).toBe(before.pipelineStatus);
+    // docs/00：翻译不覆盖原文；评分也不该碰原文
+    expect(after.bodyOriginal).toBe(before.bodyOriginal);
+  });
+
+  it('内容被写坏（写路径抛错）时事务整体回滚，AiRun 停在 RUNNING', async () => {
+    // 用超界 id 让 `contents` 的 UPDATE 注定失败 —— 此时同事务里的
+    // AiRun 收尾也必须回滚，否则会出现「AiRun 说成功、分数没写」。
+    const aiRunId = await repository.startAiRun({
+      contentId: String(contentId),
+      taskType: AiTaskType.SCORE,
+      provider: 'openai-compatible',
+      model: 'gpt-4o-mini',
+      promptVersion: 'v1',
+    });
+
+    await expect(
+      repository.finishAiRun({
+        aiRunId,
+        // 不存在的 contentId → content.update 抛 P2025
+        contentId: '999999999999',
+        status: AiRunStatus.SUCCEEDED,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0.000001,
+        durationMs: 100,
+        errorCode: null,
+        artifact: {
+          kind: 'score',
+          scoreUpdate: { importanceScore: 80, finalScore: 80 },
+          recommendationReason: '应当回滚',
+          aiAnalysis: { taskType: 'SCORE' },
+        },
+      }),
+    ).rejects.toThrow();
+
+    const run = await prisma.aiRun.findUniqueOrThrow({ where: { id: BigInt(aiRunId) } });
+    expect(run.status).toBe(AiRunStatus.RUNNING);
+  });
+
+  it('未知的 EvidenceType 在边界立刻抛错（脏数据不许进 credibility 判断）', async () => {
+    // 事件的多条证据来自不同来源 —— 顺带覆盖 sourceOfficial 的真实 join。
+    const evidences = await repository.findEventEvidences(String(eventId));
+    expect(evidences.length).toBeGreaterThan(0);
+    for (const item of evidences) {
+      expect(item.sourceOfficial).toBe(true); // 三条证据都挂在本测试的官方来源上
+    }
+
+    // 直接验证收敛函数：库里出现契约没有的值时必须炸，而不是带进上下文。
+    expect(() => toContractEvidenceType('BOGUS_TYPE' as never)).toThrow(/Unexpected EvidenceType/);
+  });
+
+  it('读库把 Prisma 枚举收敛成契约枚举（枚举桥接的读取方向）', async () => {
+    const evidences = await repository.findEventEvidences(String(eventId));
+    for (const item of evidences) {
+      expect(Object.values(EvidenceType)).toContain(item.evidenceType);
+      expect(isValidErrorCode('AI_REQUEST_FAILED')).toBe(true); // 顺带确认契约守卫可用
+    }
   });
 });

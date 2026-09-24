@@ -51,10 +51,23 @@ export type SourceIdentity = {
  * （人工补的证据、或原来源被删除后 `SetNull`）。这类证据无法证明「独立」，
  * 因此**不计入** `independentSourceCount` —— 否则删掉 Source 反而会让
  * 独立来源数虚高，那是个可以被人为制造的漏洞。
+ *
+ * ⚠ `sourceOfficial` 是**证据自己那条来源**的 official 标记，
+ * 不是内容所属来源的。两者在真实数据里会分叉（`docs/22`：同一事件多来源）：
+ * 官方先发 + 媒体转载聚成一个事件时，「内容来自媒体」与
+ * 「primary 证据来自官方」同时成立。
+ *
+ * 独立审查的 P2：第一版 `detectOfficialConfirmation()` 判的是
+ * **内容自己的来源** `source.official`，于是
+ * 「官方来源的内容 + 事件里任意一条 primary 证据」被误判成有官方确认（假阳性），
+ * 而「媒体来源的内容 + 事件里的官方一手证据」被判成没有（假阴性）。
+ * `sourceId` 为 `null` 时本字段也是 `null`（无从判断，按「不是官方」处理）。
  */
 export type EvidenceProjection = {
   id: string;
   sourceId: string | null;
+  /** 该证据所属来源是否被管理员标为 `official`；`sourceId` 为 null 时也是 null。 */
+  sourceOfficial: boolean | null;
   evidenceType: EvidenceType;
   isPrimary: boolean;
 };
@@ -94,19 +107,22 @@ export type EvidenceContextResult = {
  * 两条路径：
  * 1. 存在 `OFFICIAL_CONFIRMATION` 类型的证据 —— 这是 `docs/07` 里
  *    「官方原始发布 → `OFFICIAL_CONFIRMATION`」的产物。
- * 2. 存在 `PRIMARY_SOURCE` 类型的证据，**且它的来源被管理员标为 `official`**。
+ * 2. 存在 `PRIMARY_SOURCE` 类型的证据，**且该证据自己的来源**被管理员标为 `official`。
+ *
+ * ⚠ 第 2 条判的必须是**证据那条来源**（`evidence.sourceOfficial`），
+ * 不是当前内容所属来源。判错会同时产生假阳性与假阴性 —— 见
+ * `EvidenceProjection.sourceOfficial` 的说明。
  *
  * ⚠ 关键：判定只看**库里的 `official` 布尔位**，完全不看正文里写了什么。
  * `docs/08` 的「AI 不得凭语言风格伪造官方确认」在实现上就落成这一句 ——
  * 模型没有任何路径能影响这个布尔值，它连输出字段都没有。
  */
-function detectOfficialConfirmation(
-  source: SourceIdentity,
-  evidences: readonly EvidenceProjection[],
-): boolean {
+function detectOfficialConfirmation(evidences: readonly EvidenceProjection[]): boolean {
   return evidences.some((evidence) => {
     if (evidence.evidenceType === EvidenceType.OFFICIAL_CONFIRMATION) return true;
-    if (evidence.evidenceType === EvidenceType.PRIMARY_SOURCE && source.official) return true;
+    if (evidence.evidenceType === EvidenceType.PRIMARY_SOURCE && evidence.sourceOfficial === true) {
+      return true;
+    }
     return false;
   });
 }
@@ -148,8 +164,15 @@ function pickPrimaryEvidenceType(evidences: readonly EvidenceProjection[]): Evid
  * 正常路径下 `id` 一定能解析；解析不了时退回 `BigInt` 最大值，
  * 让它在「取最小」的排序里排到最后，而**不是**抛异常 ——
  * 一个格式异常的 id 不应该让整条评分流水线挂掉。
+ *
+ * ⚠ 必须先判空串：`BigInt('')` **不抛错**，它等于 `0n`。
+ * 独立审查的 P4：第一版直接 `BigInt(id)` 加 try/catch，
+ * 于是空 id 被当成**最小值**而胜出（「取 id 最小」变成了「取空 id」），
+ * 兜底逻辑在最需要它的输入上恰好失效。
+ * 用正则先卡住形态，非十进制数字串一律走兜底。
  */
 function toComparableBigInt(id: string): bigint {
+  if (!/^\d+$/.test(id)) return BigInt(Number.MAX_SAFE_INTEGER);
   try {
     return BigInt(id);
   } catch {
@@ -171,7 +194,7 @@ export function buildEvidenceContext(input: {
       sourceTier: source.tier,
       official: source.official,
       independentSourceCount: countIndependentSources(evidences),
-      hasOfficialConfirmation: detectOfficialConfirmation(source, evidences),
+      hasOfficialConfirmation: detectOfficialConfirmation(evidences),
       primaryEvidenceType: pickPrimaryEvidenceType(evidences),
     },
     diagnostics: {

@@ -172,15 +172,16 @@ export class OpenAiCompatibleProvider implements AiProvider {
       });
     }
 
+    const description = describeUpstreamBody(body, response.headers.get('content-type'));
+
     if (status === 400 || status === 422) {
-      const message = extractUpstreamMessage(body) ?? '';
-      if (looksUnsupported(message)) {
+      if (looksUnsupported(description)) {
         return aiTaskUnsupportedError(
-          `AI provider does not support this request shape (HTTP ${status}): ${message}`,
+          `AI provider does not support this request shape (HTTP ${status}): ${description}`,
         );
       }
       return aiPermanentError({
-        safeMessage: `AI provider rejected the request (HTTP ${status}): ${message}`,
+        safeMessage: `AI provider rejected the request (HTTP ${status}): ${description}`,
         upstreamStatus: status,
       });
     }
@@ -188,7 +189,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     if (status === 404) {
       // 404 在 OpenAI-compatible 端点上最常见的原因是**模型名写错**。
       return aiPermanentError({
-        safeMessage: `AI provider endpoint or model not found (HTTP 404): ${extractUpstreamMessage(body) ?? ''}`,
+        safeMessage: `AI provider endpoint or model not found (HTTP 404): ${description}`,
         upstreamStatus: status,
       });
     }
@@ -205,20 +206,34 @@ function looksUnsupported(message: string): boolean {
   return UNSUPPORTED_HINTS.some((hint) => lower.includes(hint));
 }
 
+/** JSON 错误体的 `error.message` 最长保留多少字符。 */
+const UPSTREAM_MESSAGE_MAX_CHARS = 300;
+
 /**
- * 读取上游错误信息，用于诊断。
+ * 描述上游的错误体，用于诊断。
  *
- * ⚠ 注意这里只取 `error.message`，而且**只用于日志与错误信息**，
- * 不会拼进任何对外响应。上游的原文可能包含我们请求的片段，
- * 而请求里带着采集正文 —— 不能整段回显（`docs/14`）。
+ * ⚠ **只取 JSON 错误体里的 `error.message`，非 JSON 时绝不回显原文。**
+ *
+ * 第一版在「非 JSON」分支写的是 `truncate(body, 300)` —— 那是错的：
+ * 上游可能把**我们请求的片段**回显进错误体（「invalid request: ...
+ * offending fragment: <采集正文>」），而请求里带着采集正文。
+ * 于是 300 字符的正文会经由 `safeMessage` 落到日志的 `message` / `stack` /
+ * `safeMessage` 三处，还会被 `UnrecoverableError` 带进 BullMQ 的
+ * `failedReason`（Redis 里长期保留，`removeOnFail: false`）。
+ *
+ * 独立审查用真 HTTP server + 真 logger 抓到了这条泄漏（P3）。
+ * 现在非 JSON 分支只报**长度与 content-type** —— 足够诊断网关问题，
+ * 又不携带任何内容。
  */
-function extractUpstreamMessage(body: string): string | null {
+function describeUpstreamBody(body: string, contentType: string | null): string {
   try {
     const parsed = JSON.parse(body) as ChatCompletionErrorBody;
     const message = parsed.error?.message;
-    return typeof message === 'string' ? truncate(message, 300) : null;
+    if (typeof message === 'string') return truncate(message, UPSTREAM_MESSAGE_MAX_CHARS);
+    return 'error body had no error.message field';
   } catch {
-    return truncate(body, 300);
+    const type = contentType === null ? 'unknown content-type' : contentType;
+    return `non-JSON body (${body.length} bytes, ${type})`;
   }
 }
 

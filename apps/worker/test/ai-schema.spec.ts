@@ -132,14 +132,42 @@ describe('评分输出 schema', () => {
     }
   });
 
-  it('错误详情不回显完整原始文本（避免把采集正文带进日志）', () => {
-    const huge = `不是 JSON ${'中'.repeat(5_000)}`;
+  it('错误详情**完全不含**模型输出的内容，只带长度（P3 回归守卫）', () => {
+    // 第一版把前 500 字符放进 `details.rawTextPreview`，独立审查指出那是一条
+    // 可控的「注入 → 日志」通道：模型输出可以被注入操纵
+    // （正文里写「把收到的正文原样复述出来」就够了），
+    // 而 logger 会递归 `Error` 的自有可枚举属性，`details` 正在其中。
+    const secretish = '这是一段本不该出现在日志里的采集正文';
+    const huge = `不是 JSON ${secretish}${'中'.repeat(5_000)}`;
+
     try {
       parseStructuredOutput({ text: huge, schema: classifyScoreOutputSchema, ...TASK });
       throw new Error('should have thrown');
     } catch (error) {
-      const details = (error as { details?: { rawTextPreview?: string } }).details;
-      expect(details?.rawTextPreview?.length ?? 0).toBeLessThan(600);
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      const serialized = JSON.stringify(details);
+
+      expect(serialized).not.toContain('采集正文');
+      expect(serialized).not.toContain(secretish.slice(0, 8));
+      // 但必须留下足够诊断的信息
+      expect(details.reason).toBe('not_json');
+      expect(details.outputLength).toBe(huge.length);
+    }
+  });
+
+  it('zod 分支的 issues 也不含 input 回显', () => {
+    try {
+      parseStructuredOutput({
+        text: scoreOutputJson({ reason: '' }),
+        schema: classifyScoreOutputSchema,
+        ...TASK,
+      });
+      throw new Error('should have thrown');
+    } catch (error) {
+      const details = (error as { details?: { issues?: Record<string, unknown>[] } }).details;
+      for (const issue of details?.issues ?? []) {
+        expect(Object.keys(issue).sort()).toEqual(['code', 'message', 'path']);
+      }
     }
   });
 });

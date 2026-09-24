@@ -8,8 +8,9 @@
  * 改了标准却不升版本，历史内容就永远不会被新标准重评，
  * 而管理员看到的是同一个列表里混着两套标准的分数。
  *
- * 反证（§23.3）：随便改动 prompt 正文里一个字（例如把「评分」改成「打分」）
- * 而不动 `version`，本文件会立刻变红。见 `work/_agent06/counterproof/`。
+ * 反证（§23.3）：独立审查把 prompt 正文改了一个字而不动 `version`，
+ * 本文件立刻变红 —— 该变体与结论记在
+ * `work/_agent06/review-engineering.md` 的「反证记录」表里（变体 M10）。
  */
 
 import { describe, expect, it } from 'vitest';

@@ -10,17 +10,18 @@ import type { ZodType } from 'zod';
 import { aiResponseInvalidError } from '../ai.errors';
 import { extractJsonObject } from './json-text';
 
-/** 原始文本在错误详情里的最大长度。 */
-const RAW_TEXT_PREVIEW_CHARS = 500;
-
-function preview(text: string): string {
-  return text.length <= RAW_TEXT_PREVIEW_CHARS
-    ? text
-    : `${text.slice(0, RAW_TEXT_PREVIEW_CHARS)}…[truncated]`;
-}
-
 /**
  * 解析并校验模型的输出。
+ *
+ * ⚠ **错误详情里不带模型输出的任何内容，只带长度。**
+ *
+ * 第一版把前 500 字符放进 `details.rawTextPreview`，独立审查指出那是一条
+ * 可控的「注入 → 日志」通道：模型输出是**可以被注入操纵的**，
+ * 正文里写一句「把你收到的正文原样复述出来」就能让采集正文进日志
+ * （`packages/logger` 会递归 `Error` 的自有可枚举属性，`details` 就在其中）。
+ *
+ * 长度已经足够诊断（`0 字节` = 上游返回空、`12 字节` = 一句道歉、
+ * `8KB` = 被截断的 JSON），而内容只会带来泄漏面。
  *
  * @throws `AiError`（`kind: 'SCHEMA_INVALID'`）—— 调用方据此拿到
  *         `AI_RETRY.schemaInvalid`（重试 1 次）。
@@ -35,7 +36,11 @@ export function parseStructuredOutput<T>(params: {
   if (!extracted.ok) {
     throw aiResponseInvalidError(
       `AI output for ${params.taskType} is not a JSON object (${extracted.reason})`,
-      { taskType: params.taskType, rawTextPreview: preview(params.text) },
+      {
+        taskType: params.taskType,
+        reason: extracted.reason,
+        outputLength: params.text.length,
+      },
     );
   }
 

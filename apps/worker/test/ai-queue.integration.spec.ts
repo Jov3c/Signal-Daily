@@ -28,7 +28,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Queue } from 'bullmq';
 import { AiTaskType, JobName } from '@signal/contracts';
 import { createLogger } from '@signal/logger';
-import { AI_JOB_OPTIONS } from '../src/jobs/ai/queue';
+import {
+  AI_JOB_OPTIONS,
+  BULLMQ_JOBID_MIN_SEGMENTS,
+  classifyScoreJobId,
+  isBullMqAcceptableJobId,
+  translateJobId,
+} from '../src/jobs/ai/queue';
 import { AI_QUEUE_NAME } from '../src/jobs/ai/queue-names';
 import {
   aiResponseInvalidError,
@@ -117,15 +123,25 @@ async function withWorker<T>(service: unknown, run: () => Promise<T>): Promise<T
   }
 }
 
-/** 入队一个 job（attempts 取契约值，backoff 缩短以便测试跑得快）。 */
-async function enqueue(jobName: string, contentId: string): Promise<string> {
-  const jobId = `it-${randomBytes(6).toString('hex')}`;
+/**
+ * 入队一个 job。
+ *
+ * `attempts` 默认取契约值（3）；可以覆盖 —— 见「瞬时失败」那条用例的说明。
+ * `jobId` 默认自造（不用 builder，那是另一组用例的事）；
+ * backoff 缩短到 50ms 让测试跑得快。
+ */
+async function enqueue(
+  jobName: string,
+  contentId: string,
+  options: { attempts?: number; jobId?: string } = {},
+): Promise<string> {
+  const jobId = options.jobId ?? `it-${randomBytes(6).toString('hex')}`;
   await queue.add(
     jobName,
     { contentId },
     {
       jobId,
-      attempts: AI_JOB_OPTIONS.attempts,
+      attempts: options.attempts ?? AI_JOB_OPTIONS.attempts,
       backoff: { type: 'fixed', delay: 50 },
       removeOnComplete: false,
       removeOnFail: false,
@@ -186,17 +202,25 @@ describe('AI_JOB_OPTIONS 与契约一致', () => {
 });
 
 describe('真实 Redis 上的重试次数', () => {
-  it('瞬时失败恰好重试到 3 次（验证 attemptsMade 语义）', async () => {
+  it('瞬时失败恰好跑 3 次（验证 attemptsMade 语义）', async () => {
+    // ⚠ 入队 attempts 刻意提到 **5**（而不是契约的 3）。
+    //
+    // 独立审查做反证时发现：用 attempts=3 时，handler 的上限（attempt >= 3）
+    // 与 BullMQ 自己的上限**重合**，于是把 `attemptsMade + 1` 改成
+    // `attemptsMade`（把语义猜错一格）之后这条测试**仍然是绿的** ——
+    // 两种实现都恰好跑 3 次，看不出差别。
+    //
+    // 提到 5 就分开了：语义正确 → handler 在第 3 次主动停（共 3 次）；
+    // 语义猜错 → handler 要到第 4 次才停（共 4 次）。
+    // 现在这条才真正在压 `attemptsMade` 的语义。
     const { service, calls } = buildCountingService([aiTransientError({ safeMessage: 'timeout' })]);
 
     await withWorker(service, async () => {
-      const jobId = await enqueue(JobName.AI_CLASSIFY_SCORE, '4242');
+      const jobId = await enqueue(JobName.AI_CLASSIFY_SCORE, '4242', { attempts: 5 });
       const state = await waitForTerminal(jobId);
       await settle();
 
       expect(state).toBe('failed');
-      // 这一条就是本文件的全部意义：如果 `attemptsMade` 的语义猜错了，
-      // 这里会是 2 或 4，而不是 3。
       expect(calls).toHaveLength(3);
       expect(calls.every((call) => call.taskType === AiTaskType.SCORE)).toBe(true);
     });
@@ -274,4 +298,36 @@ describe('幂等 JobId', () => {
 
     expect(String(second.id)).toBe(String(first.id));
   }, 30_000);
+});
+
+describe('本模块的 JobId builder 真的能被 BullMQ 接受（P0 回归守卫）', () => {
+  it('classifyScoreJobId 的产物能入队', async () => {
+    const jobId = classifyScoreJobId('4248', 'v1');
+    await expect(
+      queue.add(JobName.AI_CLASSIFY_SCORE, { contentId: '4248' }, { jobId }),
+    ).resolves.toBeDefined();
+  }, 30_000);
+
+  it('translateJobId 的产物能入队（第一版产出 2 段被 BullMQ 拒绝）', async () => {
+    // ⚠ 这条是本文件最重要的回归守卫。
+    //
+    // 第一版 `translateJobId('123')` 产出 `translate:123`（2 段），
+    // 而 BullMQ 对含 `:` 的自定义 jobId 要求**恰好 3 段**，
+    // 于是 `queue.add()` 直接抛 `Custom Id cannot contain :` ——
+    // `ai.translate` 永远进不了队列，翻译链路整体不可用。
+    //
+    // 而当时 21 项集成测试全绿：它们自己拼 `it-<random>` 字面量，
+    // **从来没有调用过 builder**。「测试自己拼字面量」是一种很隐蔽的空跑。
+    const jobId = translateJobId('4249', 'v1');
+    await expect(
+      queue.add(JobName.AI_TRANSLATE, { contentId: '4249' }, { jobId }),
+    ).resolves.toBeDefined();
+  }, 30_000);
+
+  it('builder 的产物满足 BullMQ 的段数规则（不依赖 Redis 的静态判据）', () => {
+    for (const jobId of [classifyScoreJobId('1', 'v1'), translateJobId('1', 'v1')]) {
+      expect(isBullMqAcceptableJobId(jobId)).toBe(true);
+      expect(jobId.split(':')).toHaveLength(BULLMQ_JOBID_MIN_SEGMENTS);
+    }
+  });
 });

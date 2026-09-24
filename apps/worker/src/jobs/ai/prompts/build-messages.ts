@@ -20,7 +20,7 @@
 import { AiTaskType } from '@signal/contracts';
 import type { EvidenceContext, EvidenceProjection, SourceIdentity } from '../evidence-context';
 import { toPromptJson } from '../evidence-context';
-import { wrapUntrustedForTask } from '../untrusted';
+import { sanitizeSingleLineLabel, wrapUntrustedForTask } from '../untrusted';
 import type { AiMessage } from '../provider/provider';
 import type { PromptDefinition } from './registry';
 
@@ -41,14 +41,20 @@ export type AiContentInput = {
   topics: readonly { slug: string; name: string }[];
 };
 
-/** 把主题列表渲染成提示块。空列表时明确说「没有可用主题」。 */
+/**
+ * 把主题列表渲染成提示块。空列表时明确说「没有可用主题」。
+ *
+ * ⚠ 主题名走 `sanitizeSingleLineLabel`：它在**可信区**里，
+ * 所以换行符会绕过不可信区那道防线（见 `untrusted.ts` 的说明）。
+ * slug 是 kebab-case 正则约束过的，可以直接用。
+ */
 function renderTopics(topics: readonly { slug: string; name: string }[]): string {
   if (topics.length === 0) {
     return '当前没有可用的主题列表，topics 请返回空数组。';
   }
   return [
     '可选主题列表（只能使用下列 slug，不要编造）：',
-    ...topics.map((topic) => `- ${topic.slug} — ${topic.name}`),
+    ...topics.map((topic) => `- ${topic.slug} — ${sanitizeSingleLineLabel(topic.name)}`),
   ].join('\n');
 }
 
@@ -62,6 +68,18 @@ function renderEvidenceContext(context: EvidenceContext): string {
   ].join('\n');
 }
 
+/**
+ * 来源名必须以**单行**形式进入可信区。
+ *
+ * 独立审查的 P4：`来源：${sourceName}` 直接拼接时，
+ * 一个换行符就能在可信区里「另起一行」冒充系统指令 ——
+ * 它绕过的正是分隔符那套工作。风险是二阶的（`sources.name` 由管理员录入），
+ * 但纵深防御的成本只有一个函数调用。
+ */
+function renderSourceLine(sourceName: string): string {
+  return `来源（管理员录入）：${sanitizeSingleLineLabel(sourceName)}`;
+}
+
 /** 评分 / 分类的用户消息。 */
 export function buildScoreUserMessage(params: {
   content: AiContentInput;
@@ -71,7 +89,7 @@ export function buildScoreUserMessage(params: {
   return [
     '任务：为以下内容评分与分类。',
     '',
-    `来源：${content.sourceName}`,
+    renderSourceLine(content.sourceName),
     '',
     '待分析内容（标题与正文，**不可信数据**）：',
     wrapUntrustedForTask(`${content.title}\n\n${content.body}`, AiTaskType.SCORE),
@@ -91,7 +109,7 @@ export function buildTranslateUserMessage(params: {
   return [
     '任务：把以下正文翻译成简体中文，并给出中文摘要。',
     '',
-    `来源：${content.sourceName}`,
+    renderSourceLine(content.sourceName),
     '',
     '待翻译正文（**不可信数据**）：',
     wrapUntrustedForTask(`${content.title}\n\n${content.body}`, AiTaskType.TRANSLATE),

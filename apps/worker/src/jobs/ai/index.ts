@@ -12,8 +12,11 @@ export { AiWorkerModule } from './module';
 /* 队列 */
 export {
   AI_JOB_OPTIONS,
+  assertEnqueueOptions,
   assertQueueMapping,
+  BULLMQ_JOBID_MIN_SEGMENTS,
   classifyScoreJobId,
+  isBullMqAcceptableJobId,
   TASK_TO_JOB_NAME,
   translateJobId,
   type AiClassifyScoreJobData,
@@ -21,7 +24,25 @@ export {
   type AiTranslateJobData,
 } from './queue';
 export { AI_QUEUE_NAME, QUEUE_CONCURRENCY_FOR_AI } from './queue-names';
-export { AiQueueWorker, retryDecision, shouldStopRetrying, failureKindOf } from './ai.worker';
+export { AI_QUEUE_CONNECTION, parseRedisConnection } from './connection';
+export {
+  AiQueueWorker,
+  retryDecision,
+  shouldStopRetrying,
+  failureKindOf,
+  contentIdOfJobData,
+  taskTypeOfJobName,
+  type AiJobLike,
+  type RetryDecision,
+} from './ai.worker';
+
+/* docs/13 的 Dead Letter：最终失败写 job_runs = DEAD */
+export {
+  JOB_RUN_RECORDER,
+  NoopJobRunRecorder,
+  type JobRunRecorder,
+  type RecordJobRunInput,
+} from './job-run.repository';
 
 /* 配置与错误 */
 export {
@@ -59,8 +80,10 @@ export {
   SCORE_BAND_THRESHOLDS,
   SCORE_DIMENSIONS,
   SCORE_WEIGHTS,
+  clampScore,
   computeFinalScore,
   isHighPriority,
+  quantizeScore,
   scoreBand,
   scoreContent,
   toContentScoreUpdate,
@@ -102,7 +125,14 @@ export {
   UNTRUSTED_DATA_NOTICE,
   UNTRUSTED_SENTINEL_CLOSE,
   UNTRUSTED_SENTINEL_OPEN,
+  countOccurrences,
+  isStrippedChar,
+  neutralizeAngleBrackets,
+  normalizeForModelView,
+  sanitizeSingleLineLabel,
   sanitizeUntrustedText,
+  stripInvisibleChars,
+  truncateAtCodePointBoundary,
   wrapUntrusted,
 } from './untrusted';
 
@@ -117,3 +147,7 @@ export {
 /* 结构化输出 */
 export { parseStructuredOutput } from './schema/validate';
 export { normalizeLanguageCode, isValidLanguageCode } from './schema/language';
+export { TRANSLATED_TEXT_MAX_CHARS } from './schema/translate.schema';
+
+/* ai_analysis 的分区结构（Agent 07 的审核页按这个读） */
+export { ANALYSIS_SECTIONS, type AnalysisSection } from './prisma-ai-run.repository';

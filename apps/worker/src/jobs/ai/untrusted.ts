@@ -10,18 +10,38 @@
  * ── 只写一句「这是数据」是不够的 ─────────────────────────────────────
  * 如果正文里出现了和我们一模一样的分隔符，它就能**提前闭合**不可信区，
  * 之后的内容在模型看来就是「可信区域」，那句「这是数据」的声明随之失效。
- * 所以必须让**正文里不可能构造出分隔符**：
  *
- * 分隔符 `<<<UNTRUSTED_CONTENT>>>` 完全由尖括号构成，因此规则是
- * **正文里不允许出现连续 3 个及以上的 `<` 或 `>`** —— 超出的部分被替换成
- * 不会构成分隔符的等价标记。这样分隔符在输出中恰好只出现两次
- * （我们放的那一开一合），是可被测试直接断言的性质。
+ * ── 结构性保证：正文里不留任何尖括号 ─────────────────────────────────
+ * 分隔符 `<<<UNTRUSTED_CONTENT>>>` 完全由尖括号构成，因此本模块的规则是
+ * **把不可信正文里的每一个 `<` 与 `>` 都改写成全角形式**（`＜` / `＞`）。
+ * 于是「正文里不可能构造出分隔符」不再是一个需要论证的性质，
+ * 而是一个**显然的结构事实**：构成它的字符根本不存在了。
+ *
+ * ⚠ 第一版做的是「把连续 3 个以上的尖括号改写掉」（一个启发式）。独立审查
+ * 用真跑证明它可被绕过：把 `<` 与 `>` 用**不可见格式字符**隔开
+ * （`U+200E` LRM、`U+00AD` 软连字符、`U+061C` ALM、`U+180E`、`U+2061`、
+ * `U+206A`、`U+FFF9`、`U+E0001`、`U+1D173` 等 10 类），
+ * `/<{3,}/` 就不匹配了；而模型的 tokenizer 只要丢弃这些格式字符，
+ * 就会看到一个**额外的闭标记** —— 不可信区被提前闭合。
+ *
+ * 那次修复因此做了两件事，缺一不可：
+ *   1. 剔除集合从「手写码点表」改成 **Unicode `Cf` / `Cc` 属性类**
+ *      （手写表必然漏，而且 Unicode 还在新增 `Cf` 字符）；
+ *   2. 防闭合从「启发式」改成「**结构上不可能**」（所有尖括号一律改写）。
+ *
+ * 教训（已记入 HANDOFF）：**枚举式的防护会随攻击面扩张而静默失效**，
+ * 而失效时所有测试仍然是绿的 —— 因为测试断言的是当时想到的那几类。
+ *
+ * ── 代价（设计取舍，已记入 HANDOFF）──────────────────────────────────
+ * 正文里的尖括号会变成全角字符。对本模块的用途（评分、分类、翻译）
+ * 没有影响 —— 模型不需要逐字还原 HTML 标签。若将来有任务需要精确的
+ * 原文（例如代码片段提取），不能复用本函数，应另设一条受控通道。
  *
  * ── 为什么用固定分隔符而不是每次随机 nonce ──────────────────────────
  * 随机 nonce 也能防闭合，但会让同一份正文每次的 prompt 都不同，
  * 直接毁掉上游的 **prompt cache**（对按 token 计费的成本影响很大，
  * 而 `AI_DAILY_BUDGET_USD` 只有 5 美元）。固定分隔符 + 结构性不可构造
- * 达到了同样的防护强度，且对缓存友好。
+ * 达到同样的防护强度，且对缓存友好。
  *
  * ── 这一层不是唯一防线 ──────────────────────────────────────────────
  * `docs/14`：「AI Worker 不具备 shell、任意 DB 执行和 Admin publish 权限。」
@@ -42,9 +62,9 @@ export const UNTRUSTED_SENTINEL_CLOSE = '<<<END_UNTRUSTED_CONTENT>>>';
 /** 截断标记 —— 让模型知道内容被截短了，而不是以为原文就这么长。 */
 export const TRUNCATION_MARKER = '\n[…内容已截断…]';
 
-/** 尖括号串被改写后的标记。 */
-export const ANGLE_RUN_OPEN_REPLACEMENT = '[[';
-export const ANGLE_RUN_CLOSE_REPLACEMENT = ']]';
+/** 尖括号被改写成的全角形式。 */
+export const FULLWIDTH_LESS_THAN = '＜';
+export const FULLWIDTH_GREATER_THAN = '＞';
 
 /**
  * 系统提示里关于「正文是数据」的声明。
@@ -64,48 +84,42 @@ export const UNTRUSTED_DATA_NOTICE = [
 /* 需要剔除的不可见字符                                                 */
 /* ------------------------------------------------------------------ */
 
-function codePointRange(from: number, to: number): number[] {
-  const out: number[] = [];
-  for (let codePoint = from; codePoint <= to; codePoint += 1) out.push(codePoint);
-  return out;
+/**
+ * Unicode **格式字符**（`Cf`）—— 零宽、双向控制、软连字符等全部在此类别内。
+ *
+ * 用属性类而不是手写码点表：手写表必然漏（第一版就漏了 10 类），
+ * 而且 Unicode 每个版本都在新增 `Cf` 字符，手写表会**静默过期**。
+ * 属性类让「新出现的格式字符」自动被覆盖。
+ *
+ * 覆盖到的例子：U+00AD 软连字符、U+061C 阿拉伯字母标记、
+ * U+200B–U+200F 零宽与双向标记、U+202A–U+202E 双向嵌入、
+ * U+2060–U+2064 不可见运算符、U+2066–U+206F 双向隔离、
+ * U+FEFF BOM、U+FFF9–U+FFFB 注释锚点、U+E0001 语言标记、
+ * U+1D173–U+1D17A 乐谱控制符。
+ */
+const FORMAT_CHARS = /\p{Cf}/u;
+
+/**
+ * Unicode **控制字符**（`Cc`）—— C0 / C1 / DEL / C1 扩展。
+ * `\t`(0x09) / `\n`(0x0A) / `\r`(0x0D) 是正文里合法的排版字符，显式放行。
+ */
+const CONTROL_CHARS = /\p{Cc}/u;
+
+const ALLOWED_CONTROL_CHARS = new Set(['\t', '\n', '\r']);
+
+/**
+ * 该字符是否应当从不可信正文里剔除。
+ *
+ * 两类：**格式字符**（可用来把分隔符的字符隔开，让朴素的匹配看不见）、
+ * **控制字符**（终端转义、退格等会改变日志与模型实际看到的内容）。
+ */
+export function isStrippedChar(character: string): boolean {
+  if (ALLOWED_CONTROL_CHARS.has(character)) return false;
+  return FORMAT_CHARS.test(character) || CONTROL_CHARS.test(character);
 }
 
 /**
- * 需要从不可信正文里剔除的字符码点。
- *
- * 三类：
- *
- * 1. **C0 / C1 控制符**（保留 tab 0x09、LF 0x0A、CR 0x0D）——
- *    终端转义、退格等会改变日志与模型看到的实际内容。
- * 2. **零宽字符**：U+200B ZERO WIDTH SPACE / U+200C ZWNJ / U+200D ZWJ /
- *    U+2060 WORD JOINER / U+FEFF BOM。
- *    它们可以插在分隔符中间（`<` + ZWSP + `<<UNTRUSTED`）骗过朴素的
- *    字符串匹配 —— 所以必须**先**剔除它们，**再**判尖括号。
- * 3. **双向文本控制符** U+202A–U+202E / U+2066–U+2069 ——
- *    可以让渲染顺序与逻辑顺序不一致，把真正的指令藏在看起来无害的位置。
- *
- * 用码点集合而不是正则字符类：字面量控制字符在源码里既不可读、
- * 又会被 lint 的 `no-irregular-whitespace` 拦下，
- * 而且一旦被编辑器或工具链转义/反转义，防护会在无人察觉的情况下失效。
- * 数字码点是唯一的、不会被误处理的表示。
- */
-const STRIPPED_CODE_POINTS: readonly number[] = [
-  ...codePointRange(0x00, 0x08),
-  0x0b,
-  0x0c,
-  ...codePointRange(0x0e, 0x1f),
-  ...codePointRange(0x7f, 0x9f),
-  ...codePointRange(0x200b, 0x200d),
-  ...codePointRange(0x202a, 0x202e),
-  0x2060,
-  ...codePointRange(0x2066, 0x2069),
-  0xfeff,
-];
-
-const STRIPPED_SET = new Set<number>(STRIPPED_CODE_POINTS);
-
-/**
- * 剔除控制符与不可见字符。
+ * 剔除格式字符与控制字符。
  *
  * 用 `for...of` 按**码点**遍历（而不是按 UTF-16 码元）——
  * 否则代理对会被拆成两半，构造出非法的孤立代理项。
@@ -113,29 +127,55 @@ const STRIPPED_SET = new Set<number>(STRIPPED_CODE_POINTS);
 export function stripInvisibleChars(text: string): string {
   let out = '';
   for (const character of text) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && STRIPPED_SET.has(codePoint)) continue;
+    if (isStrippedChar(character)) continue;
     out += character;
   }
   return out;
 }
 
 /* ------------------------------------------------------------------ */
-/* 防闭合                                                              */
+/* 防闭合（结构性）                                                     */
 /* ------------------------------------------------------------------ */
 
 /**
- * 把连续 3 个及以上的尖括号改写成不会构成分隔符的形式。
+ * 把正文里的**每一个**尖括号改写成全角形式。
  *
- * 这是**防闭合的核心**：分隔符 `<<<...>>>` 需要 3 个尖括号，
- * 而经过这一步后正文里最多只剩 2 个连续的尖括号。
+ * 改写后正文里不再存在 `<` 与 `>`，因此分隔符（完全由尖括号构成）
+ * **在结构上无法被构造出来** —— 这比「连续 3 个以上才改写」的启发式强，
+ * 后者可以被不可见字符插空绕过。
  *
- * ⚠ 替换目标 `[[` / `]]` 本身不含尖括号，因此**不会二次构造**出分隔符。
+ * ⚠ 替换目标 `＜` / `＞`（U+FF1C / U+FF1E）本身不含半角尖括号，
+ * 因此**不会二次构造**出分隔符，也不会相互拼接成新的尖括号串。
  */
-export function neutralizeAngleBracketRuns(text: string): string {
-  return text
-    .replace(/<{3,}/g, ANGLE_RUN_OPEN_REPLACEMENT)
-    .replace(/>{3,}/g, ANGLE_RUN_CLOSE_REPLACEMENT);
+export function neutralizeAngleBrackets(text: string): string {
+  return text.replaceAll('<', FULLWIDTH_LESS_THAN).replaceAll('>', FULLWIDTH_GREATER_THAN);
+}
+
+/* ------------------------------------------------------------------ */
+/* 截断                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 按**码点边界**截断。
+ *
+ * 直接 `slice(0, maxChars)` 是按 UTF-16 码元切的，会把 emoji 一类的
+ * 代理对切成孤立代理项（`\ud83d`），送进 JSON 后部分上游会以 400 拒绝，
+ * 即使接受，模型看到的也是一个替换字符。
+ *
+ * 注意：`stripInvisibleChars` 刻意按码点遍历并有测试守卫，
+ * 但**截断路径**是另一条代码路径 —— 第一版就漏了它
+ * （典型的「守卫有牙齿但范围不对」）。
+ */
+export function truncateAtCodePointBoundary(text: string, maxChars: number): string {
+  const limit = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 0;
+  if (text.length <= limit) return text;
+
+  let end = limit;
+  // 末位是高位代理（0xD800–0xDBFF）说明它属于一个被切开的代理对，退一个码元。
+  const lastCode = text.charCodeAt(end - 1);
+  if (end > 0 && lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+
+  return text.slice(0, end);
 }
 
 /* ------------------------------------------------------------------ */
@@ -143,26 +183,26 @@ export function neutralizeAngleBracketRuns(text: string): string {
 /* ------------------------------------------------------------------ */
 
 /**
- * 清洗不可信正文：去控制符 → 去分隔符能力 → 截断。
+ * 清洗不可信正文：去控制符 → 去尖括号 → 截断。
  *
- * 顺序是刻意的：**先去零宽字符再判尖括号**。反过来的话，
- * 带零宽字符的伪分隔符会让尖括号规则看到的东西
- * 和模型最终看到的东西不一致。
+ * 顺序是刻意的：**先去不可见字符再处理尖括号**。反过来的话，
+ * 夹在尖括号中间的格式字符会让改写后的结果与模型最终看到的不一致。
  */
 export function sanitizeUntrustedText(text: string, maxChars: number): string {
   const stripped = stripInvisibleChars(text);
-  const neutralized = neutralizeAngleBracketRuns(stripped);
+  const neutralized = neutralizeAngleBrackets(stripped);
+  const truncated = truncateAtCodePointBoundary(neutralized, maxChars);
 
-  if (neutralized.length <= maxChars) return neutralized;
-  return neutralized.slice(0, maxChars) + TRUNCATION_MARKER;
+  if (truncated === neutralized) return neutralized;
+  return truncated + TRUNCATION_MARKER;
 }
 
 /**
  * 把不可信正文包进分隔符，供 prompt 使用。
  *
- * 返回的字符串里，开标记与闭标记**各恰好出现一次** ——
- * 这一点由 `ai-untrusted.spec.ts` 直接断言，并且做了反证
- * （去掉尖括号规则后该断言会变红）。
+ * 返回的字符串里，开标记与闭标记**各恰好出现一次**。
+ * 这一性质现在由**结构**保证（正文里没有尖括号），
+ * 而不是由「连续 3 个以上才改写」的启发式保证 —— 见文件头说明。
  */
 export function wrapUntrusted(text: string, maxChars: number): string {
   return `${UNTRUSTED_SENTINEL_OPEN}\n${sanitizeUntrustedText(text, maxChars)}\n${UNTRUSTED_SENTINEL_CLOSE}`;
@@ -188,4 +228,40 @@ export function countOccurrences(text: string, needle: string): number {
     index = text.indexOf(needle, index + needle.length);
   }
   return count;
+}
+
+/**
+ * 模拟「模型视角」的归一化：再丢掉一遍格式字符与控制字符。
+ *
+ * 审查 P1 的教训是「测试断言的是**原始文本**而不是**模型看到的东西**」，
+ * 于是插了不可见字符的变体不会让任何断言变红。
+ * 这个函数让守卫可以按模型视角断言 —— 即使将来有人改回启发式做法，
+ * 只要正文里还能拼出分隔符，按模型视角数就会 > 1。
+ */
+export function normalizeForModelView(text: string): string {
+  return stripInvisibleChars(text);
+}
+
+/** 单行标签的默认长度上限。 */
+export const LABEL_MAX_CHARS = 120;
+
+/**
+ * 清洗**单行标签**（来源名、主题名等由管理员录入的短文本）。
+ *
+ * 这些字段不在不可信区里（它们是管理员维护的、可信的），所以下面这条
+ * 曾经成立：`来源：${sourceName}` 直接拼进可信区，而正文里的注入企图
+ * 被分隔符挡在不可信区 —— 于是**一个换行符就能绕过全部分隔符工作**。
+ * 独立审查把它标为纵深防御缺口（P4）：风险确实是二阶的
+ * （需要管理员或被攻陷的管理员账号在来源名里塞指令），
+ * 但它绕过的正是本模块唯一的结构性防线。
+ *
+ * 因此这里比照不可信正文处理，只是额外把换行/制表折成空格 ——
+ * 标签必须是单行的，否则它就可以在可信区里「另起一行」冒充系统指令。
+ *
+ * ⚠ 长度上限不是洁癖：`sources.name` 是 `VarChar(255)`，
+ * 不加限制会把大量文本塞进可信区。
+ */
+export function sanitizeSingleLineLabel(text: string, maxChars = LABEL_MAX_CHARS): string {
+  const singleLine = stripInvisibleChars(text).replace(/\s+/g, ' ').trim();
+  return truncateAtCodePointBoundary(neutralizeAngleBrackets(singleLine), maxChars);
 }

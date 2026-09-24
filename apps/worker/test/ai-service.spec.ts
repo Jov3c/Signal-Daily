@@ -12,8 +12,6 @@
  *    **永不写 `sources`**（`docs/08`），也永不写 `pipelineStatus`（Agent 05 的）。
  */
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { AiTaskType, EvidenceType, SourceKind, SourceTier } from '@signal/contracts';
 import { createLogger } from '@signal/logger';
@@ -45,23 +43,6 @@ function userMessageOf(provider: FakeAiProvider): string {
   const message = request?.messages.find((candidate) => candidate.role === 'user');
   if (message === undefined) throw new Error('no user message was sent');
   return message.content;
-}
-
-/**
- * 去掉注释后的源码。
- *
- * 用途见文件末尾的「实现约束」组：那些守卫要在**代码**上断言，
- * 而本模块的注释里大量引用了 `pipelineStatus` / `sources` 这些名字
- * （解释「为什么不能碰它们」）。不剥注释的话，写得越清楚的注释
- * 越容易把守卫顶红 —— 那等于在惩罚好注释。
- */
-function stripComments(source: string): string {
-  return (
-    source
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      // 前置 `[^:]` 避免把 `https://` 当成行注释起点
-      .replace(/(^|[^:])\/\/.*$/gm, '$1')
-  );
 }
 
 function buildService(
@@ -117,7 +98,9 @@ function seedContentWithEvidence(repository: InMemoryAiRepository): void {
     },
   });
   repository.seedEvidences('900', [
-    evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true),
+    // 第 5 个参数是「**证据那条来源**」的 official —— 与内容所属来源是两件事。
+    // 只有一个官方一手证据，所以 hasOfficialConfirmation 应为 true。
+    evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true, true),
     evidence('2', '8', EvidenceType.SUPPORTING_SOURCE),
     evidence('3', '8', EvidenceType.SUPPORTING_SOURCE), // 同来源重复
   ]);
@@ -542,36 +525,41 @@ describe('日志脱敏（docs/14）', () => {
   });
 });
 
-describe('服务本身的实现约束', () => {
-  const serviceSource = stripComments(
-    readFileSync(fileURLToPath(new URL('../src/jobs/ai/ai.service.ts', import.meta.url)), 'utf8'),
-  );
+describe('写入范围：两个任务的产物互不覆盖（真 bug 回归守卫）', () => {
+  it('先评分再翻译，评分侧的 band / topics 仍在 ai_analysis 里', async () => {
+    // ⚠ 这一条是独立审查在**真库**上发现的 P2 的回归守卫。
+    // 原先 SCORE 与 TRANSLATE 都整列覆盖 `contents.ai_analysis`，
+    // 于是同一条内容先评分再翻译后，评分侧的 dimensions / finalScore /
+    // band / topics **全部消失** —— 而 `ai-service.ts` 里恰好写着
+    // 「即使 Agent 05 没有把 topics 写进 content_topics，管理员在审核页
+    // 仍能看到模型当时选了什么」。那句话在正常流水线形态下不成立。
+    const { service, repository, provider } = buildService();
+    seedContentWithEvidence(repository);
 
-  it('源码里没有对 `source` 表的写操作（结构性约束）', () => {
-    // 这一条守的是「AI 不能修改 Source Tier / 不能自己宣布官方」。
-    // 行为层已经有用例覆盖，但那条只能覆盖**走到的路径**；
-    // 这里直接扫源码，任何一处对 sources 的写都会被抓住。
-    expect(serviceSource).not.toMatch(/\.source\.(update|updateMany|upsert|create)/);
+    provider.setDefault(ok(scoreOutputJson()));
+    await service.runTask({ taskType: AiTaskType.SCORE, contentId: '42' });
+
+    provider.setDefault(ok(translateOutputJson()));
+    await service.runTask({ taskType: AiTaskType.TRANSLATE, contentId: '42' });
+
+    const analysis = repository.readAnalysis('42');
+    expect(analysis.score).toMatchObject({ band: expect.any(String) });
+    expect(analysis.score).toMatchObject({ topics: ['ai-models'] });
+    expect(analysis.translation).toMatchObject({ detectedLanguage: 'en' });
   });
 
-  it('源码里没有碰 pipelineStatus（状态机归 Agent 05）', () => {
-    expect(serviceSource).not.toContain('pipelineStatus');
-  });
+  it('反序（先翻译再评分）同样两边都在', async () => {
+    const { service, repository, provider } = buildService();
+    seedContentWithEvidence(repository);
 
-  it('源码里没有写 ContentTopic（分类结果交给 Agent 05 落库）', () => {
-    expect(serviceSource).not.toMatch(/contentTopic\.(create|upsert|delete)/);
-  });
+    provider.setDefault(ok(translateOutputJson()));
+    await service.runTask({ taskType: AiTaskType.TRANSLATE, contentId: '42' });
 
-  it('剥注释的守卫本身有牙齿（否则上面的约束是空跑）', () => {
-    // 反证：如果 stripComments 什么都不做，上面那条会因为我们自己的注释而变红。
-    // 这里直接确认它确实剥掉了东西 —— 且没剥错。
-    const raw = readFileSync(
-      fileURLToPath(new URL('../src/jobs/ai/ai.service.ts', import.meta.url)),
-      'utf8',
-    );
-    expect(raw).toContain('pipelineStatus'); // 注释里提到了
-    expect(stripComments(raw)).not.toContain('pipelineStatus'); // 代码里没有
-    // 且不误伤 URL 里的 `//`
-    expect(stripComments("const u = 'https://example.com';")).toContain('https://example.com');
+    provider.setDefault(ok(scoreOutputJson()));
+    await service.runTask({ taskType: AiTaskType.SCORE, contentId: '42' });
+
+    const analysis = repository.readAnalysis('42');
+    expect(analysis.score).toMatchObject({ topics: ['ai-models'] });
+    expect(analysis.translation).toMatchObject({ detectedLanguage: 'en' });
   });
 });

@@ -21,8 +21,6 @@ import {
   AiTaskType,
   SourceKind,
   SourceTier,
-  type AiRunStatusValue,
-  type AiTaskTypeValue,
   type EvidenceType,
 } from '@signal/contracts';
 import type { AiConfig } from '../../src/jobs/ai/ai.config';
@@ -78,10 +76,10 @@ export type SeedContent = Partial<Omit<AiContentRecord, 'id'>> & { id: string };
 export type SeedAiRun = {
   id: string;
   contentId: string | null;
-  taskType: AiTaskTypeValue;
+  taskType: AiTaskType;
   createdAt: Date;
   estimatedCostUsd: number | null;
-  status?: AiRunStatusValue;
+  status?: AiRunStatus;
 };
 
 export class InMemoryAiRepository implements AiRepository {
@@ -90,6 +88,8 @@ export class InMemoryAiRepository implements AiRepository {
   readonly topics: AiTopicRecord[] = [];
   readonly aiRuns = new Map<string, SeedAiRun>();
   readonly evidencesByEvent = new Map<string, EvidenceProjection[]>();
+  /** `contents.ai_analysis` 的替身（按任务分区）。 */
+  readonly analysis = new Map<string, Record<string, unknown>>();
 
   private nextRunId = 1000;
 
@@ -188,7 +188,7 @@ export class InMemoryAiRepository implements AiRepository {
     this.applyArtifact(input);
   }
 
-  /** 与真实实现的 `contentWriteFor()` 一一对应。 */
+  /** 与真实实现的 `contentWriteFor()` + `mergeAnalysisSection()` 一一对应。 */
   private applyArtifact(input: FinishAiRunInput): void {
     const artifact: AiArtifact = input.artifact;
     if (artifact.kind === 'none') return;
@@ -206,7 +206,7 @@ export class InMemoryAiRepository implements AiRepository {
         data: {
           ...artifact.scoreUpdate,
           recommendationReason: artifact.recommendationReason,
-          aiAnalysis: artifact.aiAnalysis,
+          aiAnalysis: this.mergeSection(input.contentId, 'score', artifact.aiAnalysis),
         },
       });
       return;
@@ -218,9 +218,33 @@ export class InMemoryAiRepository implements AiRepository {
       id: input.contentId,
       data: {
         bodyTranslated: artifact.bodyTranslated,
-        aiAnalysis: artifact.aiAnalysis,
+        // 译文落到 `translatedBody`，供断言「绝不写 bodyOriginal」。
+        translatedBody: artifact.bodyTranslated,
+        aiAnalysis: this.mergeSection(input.contentId, 'translation', artifact.aiAnalysis),
       },
     });
+  }
+
+  /**
+   * 复刻真实实现的**按任务分区合并**。
+   *
+   * 替身必须同样复刻这一条，否则「SCORE 与 TRANSLATE 互相覆盖」
+   * 这个真 bug 在单测里看不见（真实情况正是如此：独立审查是在真库上发现的）。
+   */
+  private mergeSection(
+    contentId: string,
+    section: 'score' | 'translation',
+    patch: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const current = this.analysis.get(contentId) ?? {};
+    const merged = { ...current, [section]: patch };
+    this.analysis.set(contentId, merged);
+    return merged;
+  }
+
+  /** 读回某条内容当前的 `ai_analysis`（供跨任务断言）。 */
+  readAnalysis(contentId: string): Record<string, unknown> {
+    return this.analysis.get(contentId) ?? {};
   }
 
   async sumCostUsdBetween(from: Date, to: Date): Promise<AiSpendSummary> {
@@ -361,14 +385,21 @@ export function translateOutputJson(overrides: Record<string, unknown> = {}): st
   });
 }
 
-/** 一份合法的证据行。 */
+/**
+ * 一份合法的证据行。
+ *
+ * `sourceOfficial` 默认 `false`（与 `Source.official` 的默认值一致）——
+ * 显式传 `true` 才能构造「官方来源的证据」。
+ * 注意它与「内容所属来源的 official」是**两件事**（见 evidence-context.ts）。
+ */
 export function evidence(
   id: string,
   sourceId: string | null,
   evidenceType: EvidenceType,
   isPrimary = false,
+  sourceOfficial: boolean | null = sourceId === null ? null : false,
 ): EvidenceProjection {
-  return { id, sourceId, evidenceType, isPrimary };
+  return { id, sourceId, sourceOfficial, evidenceType, isPrimary };
 }
 
 export { AiTaskType, AiRunStatus };

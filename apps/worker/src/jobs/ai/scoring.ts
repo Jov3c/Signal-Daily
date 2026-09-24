@@ -109,22 +109,53 @@ export function isHighPriority(band: ScoreBand): boolean {
 export type DimensionScores = Readonly<Record<ScoreDimension, number>>;
 
 /** 把分数收敛到合法区间 —— 模型偶尔会给出 105 或 -3。 */
-function clampScore(value: number): number {
+export function clampScore(value: number): number {
   if (!Number.isFinite(value)) return SCORE_MIN;
   return Math.min(SCORE_MAX, Math.max(SCORE_MIN, value));
 }
 
-/** 量子化到一位小数，避免 `69.99999999` 掉进错误的档位。 */
+/** 量子化到一位小数的整数形式（85.0 → 850）。 */
 function quantizeToTenths(value: number): number {
   return Math.round(clampScore(value) * SCORE_TENTHS_PER_POINT);
 }
 
 /**
+ * 把分数收敛成**落库精度**（一位小数）。
+ *
+ * ⚠ 这个函数的返回值必须被**贯穿使用**：参与加权求和的值、
+ * 写进 `ai_analysis` 的值、写进六维列的值，三者必须是同一个数。
+ *
+ * 独立审查的 P2 就是这三者不一致：第一版 `scoreContent()` 返回的是
+ * **未量化**的原始值（例如 84.85），而 `computeFinalScore()` 内部按
+ * `Math.round(v * 10)` 量化（84.85 → **84.9**）参与加权。于是同一次写入里：
+ *
+ * ```text
+ * aiAnalysis.dimensions.importance = 84.85
+ * contents.importance_score        = 84.8   ← Prisma 按 double 的十进制展开落 DECIMAL(4,1)
+ * 参与 finalScore 计算的值          = 84.9
+ * ```
+ *
+ * 后果不只是「显示不一致」：`final_score` 与「用落库后的六维按 docs/08 权重重算」
+ * 最多差 0.10，而 `isHighPriority()` 只看档位 —— 审查穷尽搜索找出了
+ * **3 组档位翻转**（例如落库 70.00 RECOMMENDED vs 重算 69.98 NORMAL），
+ * 直接改变「进不进高优先审核列表」。
+ *
+ * 注意 `Math.round(v * 10)` 与「double → DECIMAL(4,1)」在十进制上恰好为
+ * `x.x5` 的值上方向可能相反（84.85 一个向上一个向下）—— 所以**不能在
+ * 计算与落库两处各量化一次**，只能量化一次、处处复用。
+ */
+export function quantizeScore(value: number): number {
+  return quantizeToTenths(value) / SCORE_TENTHS_PER_POINT;
+}
+
+/**
  * 六维加权求和。
  *
- * 全程整数：
- * `finalScore = Σ(分数量化值 × 权重) / (10 × 100)`
+ * 全程整数：`finalScore = Σ(分数量化值 × 权重) / (10 × 100)`
  * 结果保留 2 位小数 —— 对齐 `contents.final_score` 的 `DECIMAL(5,2)`。
+ *
+ * 传入的值应该已经过 `quantizeScore()`；重复量化是幂等的，所以即使调用方
+ * 传了原始值也不会算错（`computeFinalScore` 自己也会量化一遍）。
  */
 export function computeFinalScore(scores: DimensionScores): number {
   let weightedSum = 0;
@@ -138,20 +169,27 @@ export function computeFinalScore(scores: DimensionScores): number {
 
 /** 一次完整的评分结果。 */
 export type ScoreResult = {
+  /** **已量化到落库精度**（一位小数）。 */
   dimensions: DimensionScores;
   finalScore: number;
   band: ScoreBand;
 };
 
-/** 计算完整评分（六维 + final + 档位）。 */
+/**
+ * 计算完整评分（六维 + final + 档位）。
+ *
+ * 返回的 `dimensions` 是**量化后**的值，因此：
+ * - 加权求和用的值与落库的值一致；
+ * - 从 `contents` 的六维列按权重重算出的分数与 `final_score` 一致。
+ */
 export function scoreContent(scores: DimensionScores): ScoreResult {
   const normalized: Record<ScoreDimension, number> = {
-    importance: clampScore(scores.importance),
-    relevance: clampScore(scores.relevance),
-    credibility: clampScore(scores.credibility),
-    novelty: clampScore(scores.novelty),
-    density: clampScore(scores.density),
-    readValue: clampScore(scores.readValue),
+    importance: quantizeScore(scores.importance),
+    relevance: quantizeScore(scores.relevance),
+    credibility: quantizeScore(scores.credibility),
+    novelty: quantizeScore(scores.novelty),
+    density: quantizeScore(scores.density),
+    readValue: quantizeScore(scores.readValue),
   };
   const finalScore = computeFinalScore(normalized);
   return { dimensions: normalized, finalScore, band: scoreBand(finalScore) };

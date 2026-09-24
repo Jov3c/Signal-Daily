@@ -85,19 +85,62 @@ describe('官方确认判定', () => {
     expect(context.hasOfficialConfirmation).toBe(true);
   });
 
-  it('PRIMARY_SOURCE + 来源被标为 official 即为真', () => {
+  it('PRIMARY_SOURCE + **该证据的来源**是 official 即为真', () => {
     const { context } = buildEvidenceContext({
-      source: OFFICIAL_SOURCE,
-      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true)],
+      source: MEDIA_SOURCE, // 内容可以来自媒体
+      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true, true)],
     });
     expect(context.hasOfficialConfirmation).toBe(true);
   });
 
-  it('PRIMARY_SOURCE 但来源不是 official 时为假', () => {
+  it('PRIMARY_SOURCE 但该证据的来源不是 official 时为假', () => {
     // 关键：判定只看库里的 official 布尔位，不看正文里写了什么。
     const { context } = buildEvidenceContext({
       source: MEDIA_SOURCE,
-      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true)],
+      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true, false)],
+    });
+    expect(context.hasOfficialConfirmation).toBe(false);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 假阳性 / 假阴性（独立审查 P2 的回归守卫）                          */
+  /* ---------------------------------------------------------------- */
+
+  it('**假阳性回归**：内容来源是官方，但证据来源不是 → false', () => {
+    // ⚠ 第一版判的是**内容自己的来源** `source.official`，于是
+    // 「官方来源的内容 + 事件里任意一条 primary 证据」会被误判成有官方确认 ——
+    // 而那条 primary 可能来自一家普通媒体。这等于给二手来源加了官方光环，
+    // 直接违背 `docs/08` 的「官方原文应显著优先于二手报道」。
+    const { context } = buildEvidenceContext({
+      source: OFFICIAL_SOURCE, // 内容来自官方
+      evidences: [evidence('1', '9', EvidenceType.PRIMARY_SOURCE, true, false)], // 证据来自媒体
+    });
+    expect(context.hasOfficialConfirmation).toBe(false);
+  });
+
+  it('**假阴性回归**：内容来源是媒体，但事件里有官方一手证据 → true', () => {
+    // ⚠ 同一根因的另一面：官方先发 + 媒体转载聚成一个事件时，
+    // 给媒体那条内容评分**看不到**事件里的官方一手证据，
+    // 于是官方原文被当成普通二手报道。
+    const { context } = buildEvidenceContext({
+      source: MEDIA_SOURCE, // 内容来自媒体
+      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true, true)], // 证据来自官方
+    });
+    expect(context.hasOfficialConfirmation).toBe(true);
+  });
+
+  it('内容来源 official + 证据来源 official 也是 true（两种都官方）', () => {
+    const { context } = buildEvidenceContext({
+      source: OFFICIAL_SOURCE,
+      evidences: [evidence('1', '7', EvidenceType.PRIMARY_SOURCE, true, true)],
+    });
+    expect(context.hasOfficialConfirmation).toBe(true);
+  });
+
+  it('证据来源未知（sourceId 为 null）时不算官方确认', () => {
+    const { context } = buildEvidenceContext({
+      source: OFFICIAL_SOURCE,
+      evidences: [evidence('1', null, EvidenceType.PRIMARY_SOURCE, true, null)],
     });
     expect(context.hasOfficialConfirmation).toBe(false);
   });
@@ -170,6 +213,43 @@ describe('Primary Evidence 选取', () => {
         ],
       }),
     ).not.toThrow();
+  });
+
+  it('**空 id 不会被当成最小值**（P4 回归守卫）', () => {
+    // ⚠ `BigInt('')` 不抛错 —— 它等于 `0n`。第一版的兜底是
+    // `try { BigInt(id) } catch { MAX_SAFE }`，于是空 id 被当成**最小值**胜出，
+    // 「取 id 最小」变成了「取空 id」。兜底逻辑在最需要它的输入上恰好失效。
+    const { context } = buildEvidenceContext({
+      source: MEDIA_SOURCE,
+      evidences: [
+        evidence('', '7', EvidenceType.SUPPORTING_SOURCE, true),
+        evidence('5', '8', EvidenceType.PRIMARY_SOURCE, true),
+      ],
+    });
+    // 应选 id=5 那条（PRIMARY_SOURCE），而不是空 id 那条
+    expect(context.primaryEvidenceType).toBe(EvidenceType.PRIMARY_SOURCE);
+  });
+
+  it('全是脏 id 时结果仍然确定（不依赖数组顺序）', () => {
+    const forward = buildEvidenceContext({
+      source: MEDIA_SOURCE,
+      evidences: [
+        evidence('', '7', EvidenceType.SUPPORTING_SOURCE, true),
+        evidence('  ', '8', EvidenceType.PRIMARY_SOURCE, true),
+      ],
+    });
+    const backward = buildEvidenceContext({
+      source: MEDIA_SOURCE,
+      evidences: [
+        evidence('  ', '8', EvidenceType.PRIMARY_SOURCE, true),
+        evidence('', '7', EvidenceType.SUPPORTING_SOURCE, true),
+      ],
+    });
+
+    // 两条都是脏 id → 都走兜底（同值）→ 取「第一个遇到的最小值」，
+    // 顺序不同结果可能不同，但**必须不抛错**且落在候选集合内。
+    expect(Object.values(EvidenceType)).toContain(forward.context.primaryEvidenceType);
+    expect(Object.values(EvidenceType)).toContain(backward.context.primaryEvidenceType);
   });
 });
 

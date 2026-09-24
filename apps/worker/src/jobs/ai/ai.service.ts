@@ -75,16 +75,19 @@ export type ArtifactOutcome = {
   detectedLanguage: string | null;
 };
 
+/** 一次 provider 调用的用量与成本。 */
+export type AiUsage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  estimatedCostUsd: number | null;
+};
+
 /** 一次成功的 AI 任务。 */
 export type AiTaskOutcome = ArtifactOutcome & {
   taskType: AiTaskType;
   contentId: string;
   aiRunId: string;
-  usage: {
-    inputTokens: number | null;
-    outputTokens: number | null;
-    estimatedCostUsd: number | null;
-  };
+  usage: AiUsage;
   budget: AiBudgetSnapshot;
 };
 
@@ -205,6 +208,20 @@ export class AiService {
 
     const startedAt = this.clock.now();
 
+    /**
+     * provider **已经答了**之后的用量。
+     *
+     * ⚠ 必须提到 try 外面，并在**校验之前**就赋值 —— 独立审查的 P2：
+     * 模型已经答了、已经计费，但输出不合 schema 时，第一版的
+     * `recordFailure()` 拿不到 usage，于是把 token 与成本一律写成 `null`。
+     * 结果是这笔真实花掉的钱**一分都没进 `spentUsd`**，只让
+     * `uncostedRuns` +1（而它不参与 `ratio`），预算 100% 闸门永远不触发。
+     *
+     * 「答非所要」恰恰是最常见的失败形态（`AI_RETRY.schemaInvalid` 还允许重试），
+     * 所以这条路径上的漏记会持续放大。
+     */
+    let usage: AiUsage | null = null;
+
     try {
       const completion = await this.provider.complete({
         model,
@@ -213,26 +230,30 @@ export class AiService {
         temperature: TASK_TEMPERATURE[taskType],
       });
 
+      usage = {
+        inputTokens: completion.inputTokens,
+        outputTokens: completion.outputTokens,
+        estimatedCostUsd: estimateCostUsd({
+          model,
+          inputTokens: completion.inputTokens,
+          outputTokens: completion.outputTokens,
+        }),
+      };
+      this.warnIfUnpriced(model);
+
       const { artifact, outcome } = this.buildArtifact({
         taskType,
         completion: completion.text,
         detectedLanguageHint: completion.model,
       });
 
-      const estimatedCostUsd = estimateCostUsd({
-        model,
-        inputTokens: completion.inputTokens,
-        outputTokens: completion.outputTokens,
-      });
-      this.warnIfUnpriced(model);
-
       await this.repository.finishAiRun({
         aiRunId,
         contentId: content.id,
         status: AiRunStatus.SUCCEEDED,
-        inputTokens: completion.inputTokens,
-        outputTokens: completion.outputTokens,
-        estimatedCostUsd,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
         durationMs: completion.durationMs,
         errorCode: null,
         artifact,
@@ -246,7 +267,7 @@ export class AiService {
           model,
           promptVersion: prompt.version,
           durationMs: completion.durationMs,
-          estimatedCostUsd,
+          estimatedCostUsd: usage.estimatedCostUsd,
         },
         'ai task succeeded',
       );
@@ -256,15 +277,11 @@ export class AiService {
         taskType,
         contentId: content.id,
         aiRunId,
-        usage: {
-          inputTokens: completion.inputTokens,
-          outputTokens: completion.outputTokens,
-          estimatedCostUsd,
-        },
+        usage,
         budget,
       };
     } catch (error) {
-      await this.recordFailure({ aiRunId, contentId: content.id, startedAt, error });
+      await this.recordFailure({ aiRunId, contentId: content.id, startedAt, error, usage });
       throw error;
     }
   }
@@ -363,14 +380,20 @@ export class AiService {
     });
   }
 
-  /** 记录失败收尾。**绝不因为记录失败而掩盖原始异常。** */
+  /**
+   * 记录失败收尾。**绝不因为记录失败而掩盖原始异常。**
+   *
+   * `usage` 是 provider 已经答了之后拿到的用量（拿不到时为 `null`）。
+   * 有它就必须记 —— 模型已经计费了，让预算看不见这笔支出是作弊。
+   */
   private async recordFailure(params: {
     aiRunId: string;
     contentId: string;
     startedAt: Date;
     error: unknown;
+    usage: AiUsage | null;
   }): Promise<void> {
-    const { aiRunId, contentId, startedAt, error } = params;
+    const { aiRunId, contentId, startedAt, error, usage } = params;
     const kind: AiFailureKind = isAiError(error) ? error.kind : 'PERMANENT';
     const errorCode = isAiError(error) ? String(error.code) : 'AI_REQUEST_FAILED';
     const durationMs = Math.max(0, this.clock.now().getTime() - startedAt.getTime());
@@ -380,9 +403,10 @@ export class AiService {
         aiRunId,
         contentId,
         status: AiRunStatus.FAILED,
-        inputTokens: null,
-        outputTokens: null,
-        estimatedCostUsd: null,
+        // 已知就记下来（见 `usage` 的说明）；确实没有才写 null。
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        estimatedCostUsd: usage?.estimatedCostUsd ?? null,
         durationMs,
         errorCode,
         // 失败时**不写任何产物** —— 保证「写了一半的分数」不会留在库里。
@@ -396,7 +420,15 @@ export class AiService {
     }
 
     this.logger.error(
-      { err: error, contentId, jobId: aiRunId, errorCode, durationMs, failureKind: kind },
+      {
+        err: error,
+        contentId,
+        jobId: aiRunId,
+        errorCode,
+        durationMs,
+        failureKind: kind,
+        estimatedCostUsd: usage?.estimatedCostUsd ?? null,
+      },
       'ai task failed',
     );
   }

@@ -15,9 +15,11 @@ import {
   SCORE_WEIGHTS,
   computeFinalScore,
   isHighPriority,
+  quantizeScore,
   scoreBand,
   scoreContent,
   toContentScoreUpdate,
+  type ScoreDimension,
 } from '../src/jobs/ai/scoring';
 
 const ALL = (value: number): Record<(typeof SCORE_DIMENSIONS)[number], number> => ({
@@ -150,6 +152,26 @@ describe('档位（docs/08 阈值）', () => {
   });
 });
 
+/**
+ * 把「落库的六维列」映射回维度名。
+ *
+ * 这样 `computeFinalScore(columnsToDimensions(update))` 就等价于
+ * 「用**库里那六个数字**按 docs/08 的权重重算一遍」——
+ * 正是要验的那件事：`final_score` 与同行的六维列必须自洽。
+ */
+function columnsToDimensions(
+  update: ReturnType<typeof toContentScoreUpdate>,
+): Record<ScoreDimension, number> {
+  return {
+    importance: update.importanceScore,
+    relevance: update.relevanceScore,
+    credibility: update.credibilityScore,
+    novelty: update.noveltyScore,
+    density: update.densityScore,
+    readValue: update.readValueScore,
+  };
+}
+
 describe('落库映射', () => {
   it('只映射分数列与 finalScore，不含任何状态或来源字段', () => {
     const update = toContentScoreUpdate(scoreContent(ALL(80)));
@@ -166,7 +188,13 @@ describe('落库映射', () => {
     );
   });
 
-  it('写入的值与计算结果一致（不会写出未量化的中间值）', () => {
+  it('写入的六维值 = 参与加权计算的值（落库精度，一位小数）', () => {
+    // ⚠ 这一条是独立审查 P2 的回归守卫，断言方向与第一版**相反**。
+    // 第一版 `scoreContent()` 返回**未量化**的原始值，而
+    // `computeFinalScore()` 内部会量化 —— 于是三处数字不同：
+    //   aiAnalysis.dimensions = 84.85 / 落库列 = 84.8 / 参与计算 = 84.9
+    // 后果是 `final_score` 与「用落库六维按权重重算」最多差 0.10，
+    // 审查穷尽搜索找出 3 组**档位翻转**（直接改变进不进高优先审核列表）。
     const result = scoreContent({
       importance: 87.34,
       relevance: 70.06,
@@ -175,8 +203,39 @@ describe('落库映射', () => {
       density: 50.04,
       readValue: 79.95,
     });
+
+    // 返回值本身已是落库精度
+    expect(result.dimensions.importance).toBe(87.3);
+    expect(result.dimensions.relevance).toBe(70.1);
+    expect(result.dimensions.credibility).toBe(92);
+    expect(result.dimensions.density).toBe(50);
+
+    // 写库用的值与返回值是同一个
     const update = toContentScoreUpdate(result);
+    expect(update.importanceScore).toBe(result.dimensions.importance);
     expect(update.finalScore).toBe(result.finalScore);
-    expect(update.importanceScore).toBe(87.34);
+
+    // 用**落库后的六维列**按权重重算，必须等于 finalScore
+    expect(computeFinalScore(columnsToDimensions(update))).toBe(update.finalScore);
+  });
+
+  it('恰好是 x.x5 的输入也不会让三处数字分叉（84.85 那类）', () => {
+    // 84.85 是审查实测的分叉样本：`Math.round(84.85 * 10) = 849`（向上），
+    // 而 double → DECIMAL(4,1) 是 84.8（向下）—— 两边各量化一次就会打架。
+    const result = scoreContent(ALL(84.85));
+    const update = toContentScoreUpdate(result);
+
+    expect(result.dimensions.importance).toBe(84.9);
+    expect(update.importanceScore).toBe(84.9);
+    // 六维全 84.9 → 加权后仍是 84.9
+    expect(update.finalScore).toBe(84.9);
+    expect(computeFinalScore(columnsToDimensions(update))).toBe(update.finalScore);
+  });
+
+  it('quantizeScore 幂等（重复量化结果不变）', () => {
+    for (const value of [0, 9.95, 84.85, 85.05, 99.99, 100]) {
+      const once = quantizeScore(value);
+      expect(quantizeScore(once)).toBe(once);
+    }
   });
 });

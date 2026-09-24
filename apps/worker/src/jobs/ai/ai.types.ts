@@ -5,7 +5,7 @@
  * 它们来自 `@signal/contracts`，本文件只在其上做本模块特有的派生。
  */
 
-import { AiTaskType } from '@signal/contracts';
+import { AiTaskType, DomainErrorCode, type DomainErrorCodeValue } from '@signal/contracts';
 
 /* ------------------------------------------------------------------ */
 /* 模型分层（docs/08）                                                  */
@@ -119,16 +119,26 @@ export type AiFailureKind = (typeof AI_FAILURE_KINDS)[number];
  *
  * 每个分类**恰好**对应一个码，避免出现「同一个语义两个码」
  * （`packages/contracts/src/errors.ts` 的硬性规则）。
+ *
+ * ⚠ 值必须是 `DomainErrorCode.*` 常量、类型必须是 `DomainErrorCodeValue`，
+ * 而不是裸字符串字面量 —— 独立审查的 P3：第一版写的是字面量 `string`，
+ * 于是**这条 linkage 完全没有守卫**。把 `errors.ts` 里的
+ * `AI_RESPONSE_INVALID` 改名后，`tsc` 仍然 exit 0，886 项测试仍然全绿，
+ * 而运行期会产生一个**未登记的码**写进 `ai_runs.error_code`、
+ * `AiError.code`、BullMQ 的 `failedReason` —— Agent 07/11 按错误码做的
+ * 看板与筛选会静默失配，且没有任何东西会报警。
+ *
+ * 改成 `DomainErrorCode.*` 后，契约里删掉或改名任何一个码都会**编译不过**。
  */
-export const FAILURE_KIND_TO_ERROR_CODE: Readonly<Record<AiFailureKind, string>> = {
-  TRANSIENT: 'AI_REQUEST_FAILED',
-  SCHEMA_INVALID: 'AI_RESPONSE_INVALID',
-  UNSUPPORTED: 'AI_TASK_UNSUPPORTED',
-  NOT_CONFIGURED: 'AI_NOT_CONFIGURED',
-  UNAUTHORIZED: 'AI_PROVIDER_UNAUTHORIZED',
-  BUDGET_EXCEEDED: 'AI_BUDGET_EXCEEDED',
-  CONTENT_NOT_FOUND: 'AI_CONTENT_NOT_FOUND',
-  PERMANENT: 'AI_REQUEST_FAILED',
+export const FAILURE_KIND_TO_ERROR_CODE: Readonly<Record<AiFailureKind, DomainErrorCodeValue>> = {
+  TRANSIENT: DomainErrorCode.AI_REQUEST_FAILED,
+  SCHEMA_INVALID: DomainErrorCode.AI_RESPONSE_INVALID,
+  UNSUPPORTED: DomainErrorCode.AI_TASK_UNSUPPORTED,
+  NOT_CONFIGURED: DomainErrorCode.AI_NOT_CONFIGURED,
+  UNAUTHORIZED: DomainErrorCode.AI_PROVIDER_UNAUTHORIZED,
+  BUDGET_EXCEEDED: DomainErrorCode.AI_BUDGET_EXCEEDED,
+  CONTENT_NOT_FOUND: DomainErrorCode.AI_CONTENT_NOT_FOUND,
+  PERMANENT: DomainErrorCode.AI_REQUEST_FAILED,
 };
 
 /* ------------------------------------------------------------------ */

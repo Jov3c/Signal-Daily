@@ -19,9 +19,19 @@
 
 import { describe, expect, it } from 'vitest';
 import { UnrecoverableError } from 'bullmq';
-import { AiTaskType } from '@signal/contracts';
+import {
+  AiTaskType,
+  DEAD_LETTER_JOB_RUN_STATUS,
+  defaultHttpStatusForCode,
+  DomainErrorCode,
+  isValidErrorCode,
+  JobName,
+  JobRunStatus,
+} from '@signal/contracts';
 import { createLogger } from '@signal/logger';
 import { createMemoryStream } from '@signal/test-utils';
+import { AI_FAILURE_KINDS, FAILURE_KIND_TO_ERROR_CODE } from '../src/jobs/ai/ai.types';
+import type { JobRunRecorder, RecordJobRunInput } from '../src/jobs/ai/job-run.repository';
 import {
   AiQueueWorker,
   contentIdOfJobData,
@@ -40,6 +50,7 @@ import {
   aiTaskUnsupportedError,
   aiTransientError,
   aiUnauthorizedError,
+  retryPolicyFor,
 } from '../src/jobs/ai/ai.errors';
 import type { AiTaskOutcome } from '../src/jobs/ai/ai.service';
 import type { AiFailureKind } from '../src/jobs/ai/ai.types';
@@ -88,9 +99,30 @@ describe('retryDecision 表', () => {
     }
   });
 
-  it('分类覆盖完整（新增 kind 却忘了给策略时这条会红）', () => {
-    for (const kind of Object.keys(NO_RETRY_ERRORS)) {
-      expect(() => retryDecision(failureKindOf((NO_RETRY_ERRORS as never)[kind]), 1)).not.toThrow();
+  it('每个失败分类都有**已登记**的错误码与重试策略', () => {
+    // ⚠ 第一版这条是重言式：它遍历的是本地 `NO_RETRY_ERRORS` 对象的键，
+    // 断言 retryDecision 不抛错 —— 永远为真（独立审查 P3 指出）。
+    // 现在断言的是真正的不变量：分类集合 ↔ 错误码映射表**双向**一致，
+    // 且每个码都在契约的 `DomainErrorCode` 里登记过。
+    const registeredCodes = Object.values(DomainErrorCode);
+
+    for (const kind of AI_FAILURE_KINDS) {
+      expect(Object.hasOwn(FAILURE_KIND_TO_ERROR_CODE, kind), `${kind} 缺错误码`).toBe(true);
+      expect(registeredCodes, `${kind} 的码没在契约里登记`).toContain(
+        FAILURE_KIND_TO_ERROR_CODE[kind],
+      );
+      expect(() => retryPolicyFor(kind)).not.toThrow();
+    }
+
+    // 反向：映射表不能有分类集合之外的键
+    expect(Object.keys(FAILURE_KIND_TO_ERROR_CODE).sort()).toEqual([...AI_FAILURE_KINDS].sort());
+  });
+
+  it('每个分类产生的错误码都是合法形状且能映射 HTTP status', () => {
+    for (const kind of AI_FAILURE_KINDS) {
+      const code = FAILURE_KIND_TO_ERROR_CODE[kind];
+      expect(isValidErrorCode(code)).toBe(true);
+      expect(typeof defaultHttpStatusForCode(code)).toBe('number');
     }
   });
 });
@@ -126,9 +158,17 @@ describe('错误分类', () => {
 });
 
 describe('job 名与载荷解析', () => {
-  it('ai.translate → TRANSLATE，ai.classify-score → SCORE', () => {
-    expect(taskTypeOfJobName('ai.translate')).toBe(AiTaskType.TRANSLATE);
-    expect(taskTypeOfJobName('ai.classify-score')).toBe(AiTaskType.SCORE);
+  it('用 JobName 常量调用能正确映射（生产者与消费者必须同源）', () => {
+    // ⚠ 用 `JobName.*` 而不是裸字面量：契约改名时，生产者（queue.ts）
+    // 与消费者（ai.worker.ts）必须一起改。消费者写死字面量的话，
+    // 改名会变成「我自己的队列拒收我自己的 job」（独立审查 P4）。
+    expect(taskTypeOfJobName(JobName.AI_TRANSLATE)).toBe(AiTaskType.TRANSLATE);
+    expect(taskTypeOfJobName(JobName.AI_CLASSIFY_SCORE)).toBe(AiTaskType.SCORE);
+  });
+
+  it('契约里的 Job 名就是这两个（改名会在这里暴露）', () => {
+    expect(JobName.AI_TRANSLATE).toBe('ai.translate');
+    expect(JobName.AI_CLASSIFY_SCORE).toBe('ai.classify-score');
   });
 
   it('别的队列的 job 名一律拒绝（挂错队列必须炸，不能静默跑错任务）', () => {
@@ -149,8 +189,22 @@ describe('job 名与载荷解析', () => {
 /* handler                                                             */
 /* ------------------------------------------------------------------ */
 
+/** 记录 JobRun 写入的替身。 */
+class RecordingJobRuns implements JobRunRecorder {
+  readonly records: RecordJobRunInput[] = [];
+
+  async record(input: RecordJobRunInput): Promise<void> {
+    this.records.push(input);
+  }
+
+  statuses(): string[] {
+    return this.records.map((record) => String(record.status));
+  }
+}
+
 function buildWorker(
   runTask: (input: { taskType: AiTaskType; contentId: string }) => Promise<AiTaskOutcome>,
+  recorder?: JobRunRecorder,
 ) {
   const stream = createMemoryStream();
   const worker = new AiQueueWorker({
@@ -158,6 +212,7 @@ function buildWorker(
     // handle() 不接触 Redis；这些字段只是构造需要。
     connection: { host: '127.0.0.1', port: 1 },
     logger: createLogger({ service: 'worker', destination: stream }),
+    ...(recorder === undefined ? {} : { recorder }),
   });
   return { worker, stream };
 }
@@ -261,5 +316,113 @@ describe('handler 重试收敛', () => {
       contentId: '42',
       attempt: 1,
     });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Dead Letter（docs/13）                                              */
+/* ------------------------------------------------------------------ */
+
+describe('JobRun 落库（docs/13 的 Dead Letter 契约）', () => {
+  it('最终失败写 DEAD（运维面板据此发现并人工重试）', async () => {
+    // ⚠ 独立审查 P3：第一版**完全没有写 job_runs**，
+    // 于是 ai 队列最终失败的 job 只留下 BullMQ 记录与一行日志，
+    // Agent 11 无法按契约从 `job_runs` 看到 DEAD 的 AI 任务。
+    const recorder = new RecordingJobRuns();
+    const { worker } = buildWorker(async () => {
+      throw NO_RETRY_ERRORS.unauthorized;
+    }, recorder);
+
+    await expect(
+      worker.handle({
+        id: 'ai-score:42:v1',
+        name: JobName.AI_CLASSIFY_SCORE,
+        data: { contentId: '42' },
+        attemptsMade: 0,
+      }),
+    ).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect(recorder.statuses()).toEqual([DEAD_LETTER_JOB_RUN_STATUS]);
+    expect(recorder.records[0]).toMatchObject({
+      jobType: JobName.AI_CLASSIFY_SCORE,
+      jobKey: 'ai-score:42:v1',
+      attempts: 1,
+      errorCode: 'AI_PROVIDER_UNAUTHORIZED',
+    });
+  });
+
+  it('**中间**失败写 FAILED 而不是 DEAD（还要重试，不算死信）', async () => {
+    const recorder = new RecordingJobRuns();
+    const { worker } = buildWorker(async () => {
+      throw TRANSIENT_ERRORS.timeout;
+    }, recorder);
+
+    await expect(
+      worker.handle({
+        name: JobName.AI_CLASSIFY_SCORE,
+        data: { contentId: '42' },
+        attemptsMade: 0,
+      }),
+    ).rejects.toThrow();
+
+    expect(recorder.statuses()).toEqual([JobRunStatus.FAILED]);
+  });
+
+  it('成功写 SUCCEEDED', async () => {
+    const recorder = new RecordingJobRuns();
+    const { worker } = buildWorker(async () => FAKE_OUTCOME, recorder);
+
+    await worker.handle({
+      name: JobName.AI_TRANSLATE,
+      data: { contentId: '42' },
+      attemptsMade: 0,
+    });
+
+    expect(recorder.statuses()).toEqual([JobRunStatus.SUCCEEDED]);
+    expect(recorder.records[0]).toMatchObject({ errorCode: null, attempts: 1 });
+  });
+
+  it('没有 jobId 时 jobKey 为 null（不伪造幂等键）', async () => {
+    const recorder = new RecordingJobRuns();
+    const { worker } = buildWorker(async () => FAKE_OUTCOME, recorder);
+
+    await worker.handle({
+      name: JobName.AI_TRANSLATE,
+      data: { contentId: '42' },
+      attemptsMade: 0,
+    });
+
+    expect(recorder.records[0]?.jobKey).toBeNull();
+  });
+
+  it('记录 JobRun 失败时**不掩盖**原始异常（观测设施坏了不该改变业务结果）', async () => {
+    const exploding: JobRunRecorder = {
+      async record(): Promise<void> {
+        throw new Error('job_runs 表写不进去');
+      },
+    };
+    const { worker, stream } = buildWorker(async () => {
+      throw NO_RETRY_ERRORS.unauthorized;
+    }, exploding);
+
+    // 抛出的仍然是 UnrecoverableError（业务结果不变），并且有日志说明记录失败
+    await expect(
+      worker.handle({
+        name: JobName.AI_CLASSIFY_SCORE,
+        data: { contentId: '42' },
+        attemptsMade: 0,
+      }),
+    ).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect(
+      stream.records().some((entry) => String(entry.msg).includes('failed to record job run')),
+    ).toBe(true);
+  });
+
+  it('未提供 recorder 时不炸（测试可显式省略）', async () => {
+    const { worker } = buildWorker(async () => FAKE_OUTCOME);
+    await expect(
+      worker.handle({ name: JobName.AI_TRANSLATE, data: { contentId: '42' }, attemptsMade: 0 }),
+    ).resolves.toBeDefined();
   });
 });
