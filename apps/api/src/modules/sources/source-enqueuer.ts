@@ -35,6 +35,29 @@ import { SOURCE_CONFIG, type SourceConfig } from './source.config';
 /** 注入 token。 */
 export const SOURCE_FETCH_ENQUEUER = 'SOURCE_FETCH_ENQUEUER';
 
+/** 入队选项的可注入替身（测试用）。 */
+export const SOURCE_ENQUEUER_OPTIONS = 'SOURCE_ENQUEUER_OPTIONS';
+
+export type SourceEnqueuerOptions = {
+  /** 单次入队的等待上限（毫秒）。 */
+  timeoutMs?: number;
+};
+
+/**
+ * 入队等待上限。
+ *
+ * ⚠ 为什么必须有这个超时：
+ * BullMQ 要求连接使用 `maxRetriesPerRequest: null`（否则 Worker 侧会在网络
+ * 抖动时抛「max retries per request」）。副作用是 **Redis 挂掉时 ioredis 会
+ * 无限重试**，`queue.add()` 于是永远不 resolve ——
+ * 管理员点「立即抓取」会看到请求一直挂着，直到网关超时，
+ * 而且连一条错误日志都不会留下（没有异常可记）。
+ *
+ * 加上这个上限之后，Redis 不可用会在 5 秒内变成 503 `SOURCE_ENQUEUE_FAILED`，
+ * 语义明确、可告警、可重试。
+ */
+export const ENQUEUE_TIMEOUT_MS = 5_000;
+
 /**
  * `collector.fetch-source` 的任务载荷。
  *
@@ -99,11 +122,15 @@ export function redisConnectionOptions(redisUrl: string): ConnectionOptions {
 export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDestroy {
   private readonly queue: Queue<CollectorFetchSourcePayload>;
 
+  private readonly timeoutMs: number;
+
   // ⚠ 显式 @Inject：不要依赖 emitDecoratorMetadata（见 di-wiring.spec.ts）。
   constructor(
     @Inject(SOURCE_CONFIG) config: SourceConfig,
     @Inject(APP_LOGGER) private readonly logger: Logger,
+    @Inject(SOURCE_ENQUEUER_OPTIONS) options: SourceEnqueuerOptions,
   ) {
+    this.timeoutMs = options.timeoutMs ?? ENQUEUE_TIMEOUT_MS;
     this.queue = new Queue<CollectorFetchSourcePayload>(QueueName.COLLECTOR, {
       connection: redisConnectionOptions(config.redisUrl),
     });
@@ -120,20 +147,25 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
     };
 
     try {
-      await this.queue.add(JobName.COLLECTOR_FETCH_SOURCE, payload, {
-        jobId,
-        attempts: COLLECTOR_RETRY.attempts,
-        // 契约里的重试策略用 `delayMs`，BullMQ 用 `delay`。
-        backoff: COLLECTOR_RETRY.backoff === null
-          ? undefined
-          : {
-              type: COLLECTOR_RETRY.backoff.type,
-              delay: COLLECTOR_RETRY.backoff.delayMs,
-            },
-        // 保留最近的成功记录便于排障，但不要让 Redis 无限增长。
-        removeOnComplete: { age: 3_600, count: 1_000 },
-        removeOnFail: { age: 86_400 },
-      });
+      await withTimeout(
+        this.queue.add(JobName.COLLECTOR_FETCH_SOURCE, payload, {
+          jobId,
+          attempts: COLLECTOR_RETRY.attempts,
+          // 契约里的重试策略用 `delayMs`，BullMQ 用 `delay`。
+          backoff:
+            COLLECTOR_RETRY.backoff === null
+              ? undefined
+              : {
+                  type: COLLECTOR_RETRY.backoff.type,
+                  delay: COLLECTOR_RETRY.backoff.delayMs,
+                },
+          // 保留最近的成功记录便于排障，但不要让 Redis 无限增长。
+          removeOnComplete: { age: 3_600, count: 1_000 },
+          removeOnFail: { age: 86_400 },
+        }),
+        this.timeoutMs,
+        `enqueue timed out after ${this.timeoutMs}ms`,
+      );
     } catch (error) {
       // fail-closed：入队没成功就必须让调用方知道，绝不能返回「已入队」。
       // 日志里只带 sourceId 与错误摘要 —— 连接串里有密码。
@@ -158,5 +190,26 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
 
   async onModuleDestroy(): Promise<void> {
     await this.close();
+  }
+}
+
+/**
+ * 给一个 promise 加上等待上限。
+ *
+ * 注意：超时后**原 promise 仍在后台跑**（ioredis 会继续重试），
+ * 这里只是不再等它。可以接受 —— 一旦 Redis 恢复，那次入队会补上，
+ * 而 JobId 幂等保证它不会被重复执行。
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

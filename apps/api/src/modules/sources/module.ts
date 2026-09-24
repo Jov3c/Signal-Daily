@@ -21,7 +21,11 @@ import { SourcesController } from './controller';
 import { SOURCE_CLOCK, SystemSourceClock } from './clock';
 import { PrismaSourceRepository } from './prisma-source.repository';
 import { SOURCE_REPOSITORY } from './repository';
-import { BullSourceFetchEnqueuer, SOURCE_FETCH_ENQUEUER } from './source-enqueuer';
+import {
+  BullSourceFetchEnqueuer,
+  SOURCE_ENQUEUER_OPTIONS,
+  SOURCE_FETCH_ENQUEUER,
+} from './source-enqueuer';
 import { HttpSourceTester, SOURCE_TESTER, SOURCE_TESTER_DEPS } from './source-tester';
 import { SOURCE_CONFIG, createSourceConfig } from './source.config';
 import { SourcesService } from './service';
@@ -37,6 +41,8 @@ import { SourcesService } from './service';
     // 测试 override 它就能在完全不联网的情况下跑真实解析逻辑。
     { provide: SOURCE_TESTER_DEPS, useValue: {} },
     { provide: SOURCE_TESTER, useClass: HttpSourceTester },
+    // 入队选项：生产为空对象（走 ENQUEUE_TIMEOUT_MS），测试可覆盖成很短的超时。
+    { provide: SOURCE_ENQUEUER_OPTIONS, useValue: {} },
     { provide: SOURCE_FETCH_ENQUEUER, useClass: BullSourceFetchEnqueuer },
     SourcesService,
   ],

@@ -30,7 +30,7 @@ import { AUTH_REPOSITORY } from '../src/modules/auth/repository';
 import { USER_REPOSITORY } from '../src/modules/users/user.repository';
 import { UsersService } from '../src/modules/users/users.service';
 import { createAuthTestApp, type AuthTestApp } from './support/test-app';
-import { readSourceFiles } from './support/source-scan';
+import { readSourceFiles, type SourceFile } from './support/source-scan';
 
 const API_SRC = fileURLToPath(new URL('../src', import.meta.url));
 
@@ -88,6 +88,31 @@ function splitTopLevel(input: string): string[] {
 /** 形如 `Something` / `Something[]` 的构造参数类型（类或接口）。 */
 const CLASS_LIKE_TYPE = /^[A-Z][A-Za-z0-9_]*$/;
 
+/**
+ * 收集仓库里声明的所有 `type X = ...` 别名。
+ *
+ * ⚠ 为什么必须排除它们：本守卫按「首字母大写的类型名」这个**启发式**判定
+ * 「这是一个 DI 参数」。而 `type UrlSafetyReason = 'A' | 'B' | ...` 这类
+ * **字符串联合别名**同样首字母大写，于是被误判 ——
+ * Agent 03 的 `UrlSafetyError` / `SourceFetchError` 构造函数就因此被误报。
+ *
+ * 按类型别名精确排除（而不是放宽整个规则）：
+ * `type` 别名在运行期不存在，永远不可能是注入 token，
+ * 因此排除它不会漏掉任何真实的 DI 依赖。
+ */
+function declaredTypeAliases(files: SourceFile[]): Set<string> {
+  const names = new Set<string>();
+  for (const file of files) {
+    // 必须要求 `type X = …`（结尾有 `=`）—— 只匹配 `type X` 的话，
+    // 跨行 import 里的 `  type SourceRepository,` 也会被误当成别名声明。
+    for (const match of file.code.matchAll(/^\s*(?:export\s+)?type\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\s*=/gm)) {
+      const name = match[1];
+      if (name !== undefined) names.add(name);
+    }
+  }
+  return names;
+}
+
 /** 参数的类型注解（取最后一个顶层冒号之后的部分）。 */
 function parameterType(parameter: string): string | null {
   const colon = parameter.lastIndexOf(':');
@@ -101,9 +126,20 @@ function parameterType(parameter: string): string | null {
 
 describe('构造参数必须显式声明 @Inject（防 emitDecoratorMetadata 退化）', () => {
   const files = readSourceFiles(API_SRC);
+  const typeAliases = declaredTypeAliases(files);
 
   it('扫描到了 app 源码（防止空跑）', () => {
     expect(files.length).toBeGreaterThan(10);
+  });
+
+  it('类型别名集合非空（确认排除逻辑本身有效，而不是空集什么都不排）', () => {
+    expect(typeAliases.size).toBeGreaterThan(5);
+    // 这两个正是触发过误报的别名。
+    expect(typeAliases.has('UrlSafetyReason')).toBe(true);
+    expect(typeAliases.has('SourceFetchFailureReason')).toBe(true);
+    // 而真正的 DI 类型是类 / 接口，不在别名集合里 —— 排除不会漏掉它们。
+    expect(typeAliases.has('AuthGuard')).toBe(false);
+    expect(typeAliases.has('SourceRepository')).toBe(false);
   });
 
   it('每个「类 / 接口类型」的构造参数都带 @Inject(...)', () => {
@@ -116,6 +152,8 @@ describe('构造参数必须显式声明 @Inject（防 emitDecoratorMetadata 退
         const type = parameterType(parameter);
         if (type === null) continue;
         if (!CLASS_LIKE_TYPE.test(type)) continue;
+        // `type X = ...` 别名在运行期不存在，不可能是注入 token。
+        if (typeAliases.has(type)) continue;
 
         offenders.push(`${file.relativePath}: ${parameter.replace(/\s+/g, ' ')}`);
       }

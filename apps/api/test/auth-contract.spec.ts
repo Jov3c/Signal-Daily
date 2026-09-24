@@ -201,13 +201,34 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     expect(/['"`]ADMIN['"`]/.test(LITERAL)).toBe(true);
   });
 
-  it('业务模块里不声明 admin 路由前缀', () => {
+  /**
+   * 可以声明 `/admin/*` 路由的模块**白名单**。
+   *
+   * 原始断言是「`modules/**` 里一律不许出现 admin 前缀」——那是在 Auth 是
+   * 唯一业务模块时写的。Agent 03 交付的 Source Registry 是
+   * `docs/04` 里 Admin 路由的**合法所有者**（`/admin/sources` 共 8 条）。
+   *
+   * 因此把规则改成「只有登记过的所有者可以」，保留它真正的用途：
+   * 一个**没有登记**的模块突然声明 admin 路由会被抓住。
+   * 新增所有者必须同时改这里 —— 那次改动会在 diff 里显式出现。
+   */
+  const ADMIN_ROUTE_OWNERS = ['modules/sources/controller.ts'];
+
+  it('只有登记过的模块可以声明 admin 路由前缀', () => {
     const offenders = sourceFiles()
       .filter((file) => file.relativePath.startsWith('modules/'))
       .filter((file) => /Controller\(\s*['"][^'"]*admin/i.test(file.code))
-      .map((file) => file.relativePath);
+      .map((file) => file.relativePath)
+      .filter((path) => !ADMIN_ROUTE_OWNERS.includes(path));
 
     expect(offenders).toEqual([]);
+  });
+
+  it('admin 路由所有者守卫本身有牙齿：未登记的模块会被抓到', () => {
+    // 反证：换成一个没登记过的路径，同一组过滤必须命中。
+    const mounted = ['modules/sources/controller.ts', 'modules/bookmarks/controller.ts'];
+    const offenders = mounted.filter((path) => !ADMIN_ROUTE_OWNERS.includes(path));
+    expect(offenders).toEqual(['modules/bookmarks/controller.ts']);
   });
 
   it('代码里出现的错误码字面量都符合 DOMAIN_REASON 且已登记', () => {

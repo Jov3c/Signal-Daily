@@ -22,7 +22,6 @@ import type {
   UpdateSourceInput,
 } from '../../src/modules/sources/repository';
 import {
-  DUE_SOURCES_ORDER_BY,
   buildDueSourcesWhere,
   type DueSourcesFilter,
 } from '../../src/modules/sources/scheduling';
