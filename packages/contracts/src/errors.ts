@@ -128,6 +128,34 @@ export const DomainErrorCode = {
    * Agent 11 看到这个码应当去查 Redis，而不是查业务代码。
    */
   SOURCE_ENQUEUE_FAILED: 'SOURCE_ENQUEUE_FAILED',
+
+  /* ---- Agent 04 — Collectors（docs/06 / docs/13 / docs/14） ---- */
+
+  /**
+   * 一次采集**运行时**失败：超时 / 连不上 / 上游非 2xx / 响应无法解析。
+   *
+   * 与 `SOURCE_ENQUEUE_FAILED` 的分工：后者是「任务没进队列」（查 Redis），
+   * 本码是「进了队列但抓不到」（查来源本身或上游）。
+   * 记在 `Source.last_error_code` 与 `JobRun.error_code` 上，可重试。
+   */
+  SOURCE_FETCH_FAILED: 'SOURCE_FETCH_FAILED',
+  /**
+   * 该 SourceType 需要凭据但 `docs/20` 里的对应 env 未配置（例如 `X_API_BEARER_TOKEN`）。
+   *
+   * **不静默降级**：未配置就是采不了，如实记在 `last_error_code` 上等管理员处理，
+   * 而不是返回一个「成功但 0 条」的结果 —— 后者会让后台显示一切正常，
+   * 而 X 动态永远是空的（与 Agent 02「生产未配 SMTP 时登录不可用」同一取舍）。
+   * 不可重试。
+   */
+  SOURCE_FETCH_CREDENTIALS_MISSING: 'SOURCE_FETCH_CREDENTIALS_MISSING',
+  /**
+   * 上游以 401 / 403 明确拒绝（令牌无效、过期、额度耗尽）。
+   *
+   * 与平台级 `UNAUTHORIZED` 不是一回事：那个是「**我们的** API 未认证」，
+   * 本码是「**上游**拒绝了我们的凭据」。管理员要做的事是去换上游令牌。
+   * 不可重试 —— 重试同一份坏令牌只会把额度烧光。
+   */
+  SOURCE_FETCH_UNAUTHORIZED: 'SOURCE_FETCH_UNAUTHORIZED',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];

@@ -8,16 +8,24 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "start": "node dist/main.js",
-    "start:dev": "tsc -b && node dist/main.js"
+    "start:dev": "tsc -b && node dist/main.js",
+    "test:integration": "vitest run --config vitest.integration.config.mts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
+    "@prisma/client": "6.19.3",
     "@signal/config": "workspace:*",
     "@signal/contracts": "workspace:*",
     "@signal/logger": "workspace:*",
     "@signal/source-core": "workspace:*",
+    "bullmq": "5.81.5",
+    "fast-xml-parser": "^5.3.4",
+    "ioredis": "^5.4.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.0.0"
   }
 }
