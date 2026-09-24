@@ -131,6 +131,9 @@ importers:
       '@nestjs/core':
         specifier: ^11.0.0
         version: 11.2.5(@nestjs/common@11.2.5(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@11.2.5)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(typescript@6.0.3))(typescript@6.0.3)
       '@signal/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -140,12 +143,21 @@ importers:
       '@signal/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      bullmq:
+        specifier: 5.81.5
+        version: 5.81.5
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.11.1
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
 
   packages/config:
     dependencies:
