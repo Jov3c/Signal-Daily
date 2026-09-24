@@ -95,6 +95,32 @@ export const DomainErrorCode = {
 
   /** 用户不存在。 */
   USER_NOT_FOUND: 'USER_NOT_FOUND',
+
+  /* ---- Agent 03 — Source Registry（docs/06 / docs/14 / tasks/agent-03-sources.md） ---- */
+
+  /**
+   * slug 已被其它 Source 占用（`sources.slug` 唯一约束）。
+   *
+   * 注意与 `VALIDATION_FAILED` 的分工：slug **格式**非法是入参校验失败，
+   * slug **撞车**才是本码（客户端要做的是换一个 slug，而不是改格式）。
+   */
+  SOURCE_DUPLICATE_SLUG: 'SOURCE_DUPLICATE_SLUG',
+  /**
+   * 来源 URL 被 SSRF 规则拒绝。
+   *
+   * 覆盖：非 http(s) scheme、URL 内嵌凭据、端口 0、
+   * 以及指向 loopback / private / link-local / CGNAT / metadata 等地址
+   * （含各种伪装写法）。详见 `modules/sources/url-safety`。
+   */
+  SOURCE_URL_NOT_ALLOWED: 'SOURCE_URL_NOT_ALLOWED',
+  /**
+   * 与该 SourceType 匹配的 `config` 校验失败。
+   *
+   * 例如 `X_USER` 缺 `handle`、`MANUAL_URL` 缺 `url`、或出现了该类型未声明的键。
+   * 与 `VALIDATION_FAILED` 的分工：后者管 DTO 通用字段（name / slug / tier / ...），
+   * 本码只管 `config` 这一个自由结构。
+   */
+  SOURCE_CONFIG_INVALID: 'SOURCE_CONFIG_INVALID',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];
