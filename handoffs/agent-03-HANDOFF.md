@@ -570,3 +570,28 @@ dist 产物里 DI 完好；错误封套不回显输入值；探针结束后库�
 8. `docs/04` 未定义 `test` / `fetch-now` 的响应形状，因此这两个端点的返回体
    是否符合契约**无法判定** —— 属上游文档缺口，CCR 第 3 项。
 9. Agent 12 的 Admin UI 与 Agent 04 的采集器尚未开工，端到端语义无法验证。
+
+## 7. 交付后自查补验发现的问题（2026-09-24 追加）
+
+在两轮独立审查之外，我在合并后又做了一次「下游会怎么用它」的补验
+（`work/_agent03/probe-seed-roundtrip.mjs`），发现**一个我自己的测试卫生问题**：
+
+**`sources-db.integration.spec.ts` 修改了 Agent 01 的 seed 数据却没有还原。**
+
+那条用例 PATCH 了 seed 出来的 `x-karpathy` 的 `priority`（90 → 71）来验证
+「不带 config 的 PATCH 不会改写 config」，但**没有还原**。而 Agent 01 的 seed
+刻意用 `update: {}` 不覆盖已有记录 —— 也就是说 **重跑 `pnpm db:seed` 也修不回来**：
+本地与 CI 库里的 `x-karpathy` 会**永久**停在 `priority = 71`，
+与 seed 定义的 90 不一致，后面所有 Agent 看到的都不是真实基线。
+
+**已修复**：用例改为在 `finally` 里还原 `priority` 与 `config`；
+并实测确认「跑完集成测试后 `x-karpathy` 仍是 90、`sources` 仍是 8 行、零残留」。
+当前库里的那一行也已手工还原成 seed 形态。
+
+**顺带补验的结论（都通过）**：Admin UI（Agent 12）的典型用法
+「GET 一条来源 → 改一个字段 → PATCH 整份对象回去」对 seed 的**稀疏** config
+**完全可用**（`x-karpathy` 与 `anthropic-news` 两种形态都验过 → 200，seed 标记不丢）；
+不带 config 的 PATCH 也不会静默重写库里的 config。
+
+> 这条不在任何自动化测试的覆盖里，也不在两轮审查的范围内 ——
+> 是「站在下游使用者的角度把接口用一遍」才发现的。

@@ -462,16 +462,28 @@ describe('真实 MySQL —— 与 Agent 01 的 seed 数据共处', () => {
     const before = await prisma.source.findUniqueOrThrow({
       where: { id: BigInt(target?.id ?? '0') },
     });
-    const response = await request(`/api/v1/admin/sources/${target?.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ priority: 71 }),
-    });
-    expect(response.status).toBe(200);
 
-    const after = await prisma.source.findUniqueOrThrow({ where: { id: before.id } });
-    expect(after.priority).toBe(71);
-    // config 原样保留 —— 没给 config 就不该被重写。
-    expect(after.config).toEqual(before.config);
+    try {
+      const response = await request(`/api/v1/admin/sources/${target?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ priority: 71 }),
+      });
+      expect(response.status).toBe(200);
+
+      const after = await prisma.source.findUniqueOrThrow({ where: { id: before.id } });
+      expect(after.priority).toBe(71);
+      // config 原样保留 —— 没给 config 就不该被重写。
+      expect(after.config).toEqual(before.config);
+    } finally {
+      // ⚠ 必须还原：这条用例改的是 **Agent 01 的 seed 数据**，而 seed 刻意用
+      // `update: {}` 不覆盖已有记录 —— 也就是说重跑 `pnpm db:seed` 也修不回来。
+      // 不还原的话，本地/CI 库里的 `x-karpathy` 会永久停在 priority=71，
+      // 与 seed 定义的 90 不一致，后面所有 Agent 看到的都不是真实基线。
+      await prisma.source.update({
+        where: { id: before.id },
+        data: { priority: before.priority, config: before.config ?? undefined },
+      });
+    }
   });
 });
 
