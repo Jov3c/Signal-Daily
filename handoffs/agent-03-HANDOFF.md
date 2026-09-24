@@ -3,7 +3,7 @@
 **Agent:** 03 — Source Registry / X 白名单
 **Wave:** 1（上游：Agent 00、Agent 01、Agent 02）
 **日期:** 2026-09-24
-**提交:** `84214d3` `22d9dd9` `917388b` `0d2ee19` `3306ed1` `a496ea2` `967df9d`
+**提交:** `84214d3` `22d9dd9` `917388b` `0d2ee19` `3306ed1` `a496ea2` `967df9d` `f55ce3a` `2360572` `48c4226`
 **基线:** Development Contract v1.1 / Frontend Prototype v1.7 / Agent Rule v1.0
 **允许修改:** `apps/api/src/modules/sources/**`
 
