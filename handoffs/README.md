@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-24 · Agent 03
+**最后更新：** 2026-09-24 · Agent 06
 
 ---
 
@@ -16,7 +16,7 @@
 | 0 | **01** | Prisma / MySQL / Evidence | 00 | ✅ 已完成 | `b8f9f36` `5cf51ef` `31006c2` | [agent-01-HANDOFF.md](./agent-01-HANDOFF.md) |
 | 1 | **02** | Auth / User | 00, 01 | ✅ 已完成 | `cc3e4be` `7537180` `b1d4548` | [agent-02-HANDOFF.md](./agent-02-HANDOFF.md) |
 | 1 | **03** | Source Registry / X 白名单 | 00, 01, 02 | ✅ 已完成 | `84214d3` `22d9dd9` `917388b` `0d2ee19` `3306ed1` `a496ea2` `967df9d` | [agent-03-HANDOFF.md](./agent-03-HANDOFF.md) |
-| 1 | **06** | AI Provider / Score | 00, 01 | ⬜ 未开始 | — | — |
+| 1 | **06** | AI Provider / Score | 00, 01 | ✅ 已完成 | `56335c7` `dae01be` `2a7eb2b` | [agent-06-HANDOFF.md](./agent-06-HANDOFF.md) |
 | 1B | **04** | Collectors | 00, 01, 03 | ⬜ 未开始 | — | — |
 | 1B | **05** | Pipeline / Event / Evidence | 00, 01, 04, 06 | ⬜ 未开始 | — | — |
 | 2 | **07** | Admin Review / Evidence API | 00, 01, 02, 03, 05, 06 | ⬜ 未开始 | — | — |
@@ -46,12 +46,13 @@
 
 | Agent | 说明 |
 | ----- | ---- |
-| **06** | 上游 00、01 均已完成，完全畅通 |
 | **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences |
 | **04** | 上游 00、01、03 均已完成。**开工前必须先读 Agent 03 HANDOFF 的「给 Agent 04」两节**（SSRF / 调度规则 / config 形状的复用路径，以及 `NOW()` 时区陷阱） |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> Wave 1 剩余：**06**；Wave 1B 的 **04** 已解锁；Wave 2 的 **09** 也已解锁。
+> **Wave 1 已全部完成**（02 / 03 / 06）；Wave 1B 的 **04** 与 Wave 2 的 **09** 可开工。
+> ⚠ **Agent 05 仍缺上游 04**：06 已完成，但 `docs/18` 的 Wave 1B 是 04 → 05，
+> 05 必须等 04 完成后再开工（§18 / §20）。
 
 ---
 
@@ -59,7 +60,7 @@
 
 无。
 
-> ⚠ 有一项**已知集成缺口**（不阻塞 06 / 09，但 Agent 14 必做）：
+> ⚠ 有一项**已知集成缺口**（不阻塞 04 / 09，但 Agent 14 必做）：
 > `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`，
 > 因此 `node apps/api/dist/main.js` 起真实进程时 `/api/v1/auth/*` 与
 > `/api/v1/admin/sources/*` 全是 404。
@@ -140,6 +141,43 @@
 - 未新增 env；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 4 个业务码（删除 0 行）
 - **未修复但已上报**：`common/prisma/bigint-id.ts` 缺 BIGINT 上界（属 Agent 02，
   会影响 07/08/09/10），见 CCR 第 8 项
+
+### Agent 06 — AI Provider / 翻译 / 分类 / 评分
+
+**先读 HANDOFF 的补遗章节**：正文的验证（938 项单测 + 28 项集成测试全绿、16 个反证变体）
+在独立审查前就已成立，但**两轮独立审查仍查出 1 个 P0 + 2 个 P1 + 6 个 P2**，已全部修复。
+
+- 交付 `AiProvider` + OpenAI-compatible 实现（只用内置 `fetch`）、Prompt Registry（版本 + 指纹守卫）、
+  zod 严格结构化输出、六维评分、成本与预算、Evidence 上下文、注入防护、`ai.translate` /
+  `ai.classify-score` 两个 Job（含 `docs/13` 的 Dead Letter → `job_runs = DEAD`）
+- **⚠ 破坏性变更（下游必看）**：
+  1. `translateJobId(contentId, promptVersion)` —— **签名加了一个参数**（编译期即可发现）；
+  2. `ai_analysis` 结构变成 **`{ score: {...}, translation: {...} }`**（运行时变更，无编译期保护）；
+  3. `hasOfficialConfirmation` 的**判定口径变了**（改判**证据那条来源**的 official，
+     同一份数据可能得出不同结论）；
+  4. 六维列与 `final_score` 的**量化方式变了** —— 历史数据与新数据之间最多差 0.1，**档位可能不同**
+- **⚠ Agent 05 必读（边界）**：`AiService` **不写** `contents.pipelineStatus`（状态机归你）、
+  **不写** `ContentTopic`。分类结果经返回值给你：`outcome.topics`（kebab-case slug）/
+  `outcome.summary` / `outcome.detectedLanguage`。入队必须带 `...AI_JOB_OPTIONS`
+  （用默认 `attempts: 1` 会**静默关掉**重试分档）
+- **⚠ Agent 07 必读**：`ai_analysis` 读法是 `aiAnalysis.score.*`；
+  **档位不落库**，用 `scoreBand(finalScore)` 现算；`AiTaskType.CLASSIFY` **永不出现**在
+  `ai_runs`（分类与评分共用一次调用，`taskType = SCORE`），按它筛会永远查不到
+- **⚠ Agent 14 必读**：
+  1. **引用 `AiWorkerModule` 会真的起一个 BullMQ 消费者**（`onModuleInit` 自启动，
+     与 Agent 04 的 `CollectorWorker` 对齐）。若 `boot.spec.ts` 把它纳入 `WorkerModule`，
+     无 Redis 的机器上会刷重连错误 —— 需要一个**统一的**测试期开关，别让各模块自己发明；
+  2. **跨 Agent 契约缺陷（CCR 第 0 项，最高优先）**：`JobId` 里 **3/4 个 builder 的产物
+     会被 BullMQ 拒绝**（含 `:` 的 custom jobId 必须**恰好 3 段**）。
+     `JobId.normalize`（Agent 04）与 `JobId.dailyDraft`（Agent 08）是 2 段，
+     照契约使用会在**入队时同步抛错**；
+  3. worker 侧有 **5 处重复实现**（PrismaService / 枚举桥接双向 / Redis 连接解析 / JobRun 落库），
+     见 CCR 第 2 项
+- **⚠ 未新增任何 env**；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 7 个 `AI_*` 码（删除 0 行）
+- **⚠ 集成测试不能并行跑**：`pnpm test:db` 与 worker 的 `test:integration` 共用同一个 MySQL 实例，
+  两个进程同时跑会互相干扰（实测随机挂 4 项）。CI 上请串行
+- **给 Agent 11**：Redis 是硬依赖；成本是**估算**（价格表是代码常量，未知模型走兜底价）；
+  `ai_runs` 可能残留永远 `RUNNING` 的行，建议加巡检
 
 ---
 
