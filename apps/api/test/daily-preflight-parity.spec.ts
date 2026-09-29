@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { DailyDisplayStyle } from '@signal/contracts';
 import { preflightEdition, type EditionSnapshot } from '../src/modules/daily/preflight';
 
 const API_PREFLIGHT = fileURLToPath(new URL('../src/modules/daily/preflight.ts', import.meta.url));
@@ -92,7 +93,7 @@ describe('docs/10 的 Publish Preflight 五条', () => {
           {
             itemId: 'i1',
             contentId: '100',
-            displayStyle: 'LEAD',
+            displayStyle: DailyDisplayStyle.LEAD,
             sortOrder: 0,
             contentExists: true,
             contentStatus: 'APPROVED',
@@ -113,7 +114,7 @@ describe('docs/10 的 Publish Preflight 五条', () => {
     const snapshot = base();
     const section = snapshot.sections[0];
     if (section !== undefined && section.items[0] !== undefined) {
-      section.items[0].displayStyle = 'STANDARD';
+      section.items[0].displayStyle = DailyDisplayStyle.STANDARD;
     }
     const result = preflightEdition(snapshot);
     expect(result.ok).toBe(false);
@@ -125,7 +126,7 @@ describe('docs/10 的 Publish Preflight 五条', () => {
     snapshot.sections[0]?.items.push({
       itemId: 'i2',
       contentId: '101',
-      displayStyle: 'LEAD',
+      displayStyle: DailyDisplayStyle.LEAD,
       sortOrder: 1,
       contentExists: true,
       contentStatus: 'APPROVED',
@@ -170,7 +171,7 @@ describe('docs/10 的 Publish Preflight 五条', () => {
     duplicateItem.sections[0]?.items.push({
       itemId: 'i2',
       contentId: '101',
-      displayStyle: 'STANDARD',
+      displayStyle: DailyDisplayStyle.STANDARD,
       // 与第一条**同号** —— DB 有唯一约束兜底，这里要提前给出可读错误
       sortOrder: 0,
       contentExists: true,
@@ -192,7 +193,7 @@ describe('docs/10 的 Publish Preflight 五条', () => {
         {
           itemId: 'i3',
           contentId: '102',
-          displayStyle: 'MAJOR',
+          displayStyle: DailyDisplayStyle.MAJOR,
           sortOrder: 0,
           contentExists: true,
           contentStatus: 'APPROVED',

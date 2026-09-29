@@ -290,6 +290,34 @@ export const DomainErrorCode = {
    * 而是「这件事已经完成了」—— 后台可以据此提示「已发布，去看归档」。
    */
   DAILY_ALREADY_PUBLISHED: 'DAILY_ALREADY_PUBLISHED',
+
+  /* ---------------------------------------------------------------- */
+  /* Agent 09 — 收藏 / 阅读进度 / 阅读偏好                             */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * 该内容**对调用方不可见**（`docs/12`：Public API 不得返回
+   * REJECTED / internal candidate）。
+   *
+   * ⚠ **刻意涵盖两种情形**：内容不存在，**以及**存在但未 `APPROVED`。
+   * 两者返回**同一个**码是有意的 —— 否则「加收藏」这个接口会变成一个
+   * 「某 id 是否存在 / 是否被撤下」的探测器。
+   *
+   * ⚠ 与 `AI_CONTENT_NOT_FOUND` **不是同义码**：那个是 AI 任务的载荷
+   * 指向了库里不存在的内容（**只表示不存在**，且是内部任务上下文）；
+   * 这个是**对外可见性**的判定结果。`docs/05` 的「一个语义一个码」
+   * 在这里的语义是「不可见」而不是「查不到」。
+   */
+  CONTENT_NOT_VISIBLE: 'CONTENT_NOT_VISIBLE',
+  /**
+   * 阅读进度的 `resourceType` 不在 V1 支持的范围里。
+   *
+   * ⚠ `reading_progress.resource_type` 是 `VarChar(30)`，而 `docs/05`
+   * **没有为它定义枚举** —— 取值集合是本模块定的（见 CCR）。
+   * 明确定义一个码而不是复用 `VALIDATION_FAILED`：调用方需要区分
+   * 「字段形状错了」与「字段合法但这个类型 V1 不支持」。
+   */
+  READING_RESOURCE_TYPE_UNSUPPORTED: 'READING_RESOURCE_TYPE_UNSUPPORTED',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];

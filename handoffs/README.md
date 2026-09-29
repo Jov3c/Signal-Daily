@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-29 · Agent 08
+**最后更新：** 2026-09-29 · Agent 09
 
 ---
 
@@ -20,7 +20,7 @@
 | 1B   | **04** | Collectors                       | 00, 01, 03                                | ✅ 已完成 | `c88c935` `c0100d6`                                                   | [agent-04-HANDOFF.md](./agent-04-HANDOFF.md) |
 | 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ✅ 已完成 | `5b35240` `6f359f9`                                                   | [agent-05-HANDOFF.md](./agent-05-HANDOFF.md) |
 | 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ✅ 已完成 | `a31ff19`                                                             | [agent-07-HANDOFF.md](./agent-07-HANDOFF.md) |
-| 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ⬜ 未开始 | —                                                                     | —                                            |
+| 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ✅ 已完成 | `4f32af7`                                                             | [agent-09-HANDOFF.md](./agent-09-HANDOFF.md) |
 | 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ✅ 已完成 | `3675787`                                                             | [agent-08-HANDOFF.md](./agent-08-HANDOFF.md) |
 | 3    | **10** | Search / Public API              | 00, 01, 02, 05, 08, 09                    | ⬜ 未开始 | —                                                                     | —                                            |
 | 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ⬜ 未开始 | —                                                                     | —                                            |
@@ -44,13 +44,14 @@
 
 ## 当前可开工
 
-| Agent  | 说明                                                               |
-| ------ | ------------------------------------------------------------------ |
-| **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences |
+| Agent  | 说明                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------- |
+| **10** | 上游 00 / 01 / 02 / 05 / 08 / 09 全部 ✅；Public Read / FULLTEXT / Cache / Evidence Summary |
+| **11** | 上游 00 ✅（完整部署前再读 01 / 02 / 04 / 05 / 06 / 08 / 10）；Ops / 部署 / 备份            |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 / 1B / 2 / 2B 已全部完成**（02 / 03 / 04 / 05 / 06 / 07 / 08）。
-> **现在只剩 09 可以开工**（10 依赖 09，12 依赖 10，13 依赖 09 + 10）。
+> **Wave 1 / 1B / 2 / 2B 已全部完成**（02 / 03 / 04 / 05 / 06 / 07 / 08 / 09）。
+> **10 与 11 可以开工**（12 依赖 10；13 依赖 10）。
 
 ---
 
@@ -58,7 +59,7 @@
 
 无。
 
-> ⚠ 有**三项**已知集成缺口（不阻塞 09，但 Agent 14 必做）：
+> ⚠ 有**四项**已知项（不阻塞 10 / 11，但 Agent 14 必做）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
 >    - `AdminReviewModule`（Agent 07），
@@ -76,6 +77,15 @@
 >    能通过全部单测，一挂进 `app.module.ts` 就**启动即崩**。
 >    Agent 12 / 13 / 14 若新建用到该守卫的模块，请照做。
 >    （详情见 `agent-08-HANDOFF.md` 的补遗。）
+>
+> 4. ⚠ **测试文件的类型错误对 `pnpm verify` 不可见**：根 `typecheck` 只跑
+>    `tsc -b`（不含测试），而 `apps/api` / `apps/worker` 各自那条**会**检查测试的
+>    `typecheck` 脚本**从未被根命令调用**。已复现两次（Agent 07 记录过、
+>    Agent 09 又抓到 10 个）。建议把 `pnpm -r typecheck` 收进根 `verify`
+>    （Agent 09 的 CCR 第 5 项）。在那之前，提交前请手动跑
+>    `npx tsc -p apps/api/test/tsconfig.json --noEmit` 与 worker 的同名命令。
+>    当前既有错误：api **5** 个（Agent 03 的 `sources-api.spec.ts`）、
+>    worker **3** 个（Agent 04 的 `collectors-*.spec.ts`）。
 >
 > 详见下方各 Agent 的要点。
 
@@ -314,6 +324,31 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
 - **⚠ 未修复但已上报**：`JobId.dailyDraft` 仍是 2 段、会被 BullMQ 拒绝
   （Agent 06 CCR 第 0 项，本模块**第三次**重申并补了真 Redis 证据）
 - 未新增任何 env；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 7 个码（0 删除）
+
+### Agent 09 — 收藏 / 阅读进度 / 阅读偏好
+
+**先读 HANDOFF 的补遗章节**：§23 独立审查结论是**通过（无 P0 / 无 P1）**，
+但仍查出 13 条 P3/P4，**全部已修复**，其中 **2 条是真 bug**。
+
+- 交付 `docs/04` User 段的 **6 条**路由（收藏 3 + 阅读进度 1 + 偏好 2）
+- **⚠ 两处刻意的不对称设计（别当成 bug 改掉）**：
+  1. **加收藏要求内容 `APPROVED`，取消收藏不检查** —— 前者防「某 id 是否被撤下」
+     的探测器；后者保证用户总能清理自己的收藏；
+  2. 收藏列表**隐藏**内容已撤下的收藏，但**收藏行保留**（内容恢复后重现）
+- **⚠ 新错误码**：`CONTENT_NOT_VISIBLE`（404）=「不存在 **或** 存在但未审核」，
+  **两者返回相同响应是故意的**。Agent 10 的公开读可直接复用（见其 CCR 第 4 项）
+- **⚠ Agent 13**：`GET /bookmarks` 用的是**复合游标**（`{ms}-{contentId}`）——
+  不要自己拼，把 `meta.nextCursor` 原样传回；
+  收藏列表**不带** `evidenceSummary`（证据链走 `GET /contents/:id`）
+- **⚠ Agent 10**：若要在内容详情里带 `bookmarked`，请复用本模块的
+  `BookmarkService` / 仓储 —— 可见性口径必须一致，**不要自己写 `SELECT`**
+- **⚠ Agent 14 必做**：根模块 `imports` 再加三个模块
+  （`BookmarksModule` / `ReadingProgressModule` / `UserPreferencesModule`）。
+  它们**不启动任何后台任务**，不需要那个测试期开关
+- **⚠ 测试写法值得借鉴**：`user-features-http.spec.ts` 用「只桩掉
+  `ACCESS_TOKEN_VERIFIER` + `AUTH_SESSION_LOOKUP` 两个端口」的办法做**真 HTTP** 测试
+  （真的守卫 / 控制器 / 服务 / dto / 异常过滤器），不用重做 Agent 02 的登录流程
+- 未新增任何 env；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 2 个码（0 删除）
 
 ## 更新方法（Agent 完成后照做）
 
