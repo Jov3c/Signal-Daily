@@ -212,7 +212,12 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
    * 一个**没有登记**的模块突然声明 admin 路由会被抓住。
    * 新增所有者必须同时改这里 —— 那次改动会在 diff 里显式出现。
    */
-  const ADMIN_ROUTE_OWNERS = ['modules/sources/controller.ts'];
+  const ADMIN_ROUTE_OWNERS = [
+    'modules/sources/controller.ts',
+    // Agent 07：审核队列 / Evidence / Dashboard（docs/04 的 Admin Review 与
+    // Admin Event / Evidence 两节 + docs/09 的 Dashboard）。
+    'modules/admin-review/controller.ts',
+  ];
 
   /**
    * 判定「哪个文件声明了 admin 路由」的**唯一**规则。
