@@ -218,6 +218,26 @@ export const DomainErrorCode = {
    * 不可重试：重试同一个不存在的 id 只会得到同样的结果。
    */
   AI_CONTENT_NOT_FOUND: 'AI_CONTENT_NOT_FOUND',
+
+  /* ---- Agent 05 — Content Pipeline / Event / Evidence（docs/07 / docs/22） ---- */
+
+  /**
+   * 任务载荷里的 `rawItemId`（或它引用的 Source）在库中不存在。
+   *
+   * 与 `AI_CONTENT_NOT_FOUND` 同一语义、主体不同（原始事实 vs 内容）。
+   * 通常是上游传错 id，或记录在入队与执行之间被删掉了。不可重试。
+   */
+  CONTENT_RAW_ITEM_NOT_FOUND: 'CONTENT_RAW_ITEM_NOT_FOUND',
+  /**
+   * 这条原始事实**既没有标题也没有正文**（清洗与提取之后仍然什么都没有）。
+   *
+   * 不是「重试就会好」的错误：它意味着来源给出了一个空壳条目
+   * （只有时间戳、没有内容）。**不静默丢弃** —— 写进
+   * `raw_items.status = FAILED` 与 `failure_code`，让它在后台可见、可人工排查，
+   * 而不是变成一条永远没人知道为什么消失的记录。
+   * 不可重试。
+   */
+  CONTENT_EMPTY: 'CONTENT_EMPTY',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];
