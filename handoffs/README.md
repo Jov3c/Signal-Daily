@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-29 · Agent 05
+**最后更新：** 2026-09-29 · Agent 07
 
 ---
 
@@ -19,7 +19,7 @@
 | 1    | **06** | AI Provider / Score              | 00, 01                                    | ✅ 已完成 | `56335c7` `dae01be` `2a7eb2b`                                         | [agent-06-HANDOFF.md](./agent-06-HANDOFF.md) |
 | 1B   | **04** | Collectors                       | 00, 01, 03                                | ✅ 已完成 | `c88c935` `c0100d6`                                                   | [agent-04-HANDOFF.md](./agent-04-HANDOFF.md) |
 | 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ✅ 已完成 | `5b35240` `6f359f9`                                                  | [agent-05-HANDOFF.md](./agent-05-HANDOFF.md) |
-| 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ⬜ 未开始 | —                                                                     | —                                            |
+| 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ✅ 已完成 | `a31ff19`                                                         | [agent-07-HANDOFF.md](./agent-07-HANDOFF.md) |
 | 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ⬜ 未开始 | —                                                                     | —                                            |
 | 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ⬜ 未开始 | —                                                                     | —                                            |
 | 3    | **10** | Search / Public API              | 00, 01, 02, 05, 08, 09                    | ⬜ 未开始 | —                                                                     | —                                            |
@@ -46,12 +46,10 @@
 
 | Agent  | 说明                                                                                                                                                                                   |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **07** | 上游 00、01、02、03、05、06 **均已完成 → 已解锁**。开工前必读 Agent 05 HANDOFF 的「给 Agent 07」：审核行**由 05 创建**、`ai_analysis` 的分区读法、`ContentTopic.confidence` 恒为 1 |
 | **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences                                                                                                                     |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 / 1B 已全部完成**（02 / 03 / 04 / 05 / 06）；Wave 2 的 **07** 与 **09** 可开工。
-> ⚠ **Agent 08 仍缺上游 07**（Featured / Daily 的上游是 00,01,05,06,07）。
+> **Wave 1 / 1B / 2 已全部完成**（02 / 03 / 04 / 05 / 06 / 07）；**Wave 2B 的 08 与 Wave 2 的 09 可开工**。
 
 ---
 
@@ -59,9 +57,10 @@
 
 无。
 
-> ⚠ 有两项**已知集成缺口**（不阻塞 07 / 09，但 Agent 14 必做）：
+> ⚠ 有两项**已知集成缺口**（不阻塞 08 / 09，但 Agent 14 必做）：
 >
-> 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`，
+> 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
+>    + `AdminReviewModule`（Agent 07），
 >    因此 `node apps/api/dist/main.js` 起真实进程时 `/api/v1/auth/*` 与
 >    `/api/v1/admin/sources/*` 全是 404。
 > 2. `apps/worker/src/worker.module.ts` 尚未挂载 `CollectorsModule`（Agent 04）、
@@ -251,6 +250,29 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
   （**重申 Agent 06 第 0 项，仍未裁决**）；`docs/13` 没给 content-pipeline 定重试策略；
   `CollectedItem.type` 在采集端落库时被丢弃
 - **未新增任何 env**；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 2 个码
+
+
+### Agent 07 — Admin Review / Evidence API
+
+**⚠ 本模块未做 §23 独立审查**（与 Agent 05 同一处理，用户要求「一个 agent 开发就行」）。
+
+- 交付 `docs/04` 的 Admin Review 四条 + Admin Event / Evidence 五条 + `docs/09` 的 Dashboard
+  （共 **10 条路由**；有测试枚举控制器元数据做守卫，多一条即红）
+- **⚠ Agent 12 必读**：
+  1. 审核动作是 **`action` 字段**（`APPROVE_FEATURED` / `APPROVE_DAILY` / `APPROVE_BOTH` /
+     `DEFER` / `REJECT`），**批量只接受 DEFER / REJECT**（传 APPROVE 会 400，错误信息说明了原因）；
+  2. **批量响应里有 `skipped`**，前端**必须显示**，否则管理员会以为全处理了；
+  3. 列表分页封套 `{data, meta:{page,pageSize,total,totalPages}}`；
+  4. `scoreBand` 是**派生值**（85/70/55 阈值，与 Agent 06 一致），可直接用于「高优先」筛选
+- **⚠ Agent 08 必读**：**07 只做决策、不做发布** —— `FeaturedItem` / `DailyItem` 由 08 创建；
+  日报候选 = `EditorialReview.includeDailyCandidate = true` 且 `status = APPROVED`
+- **⚠ Agent 11**：Redis **不是**本模块依赖（只读 MySQL）；
+  ⚠ **api 进程里有一个 60 秒的通知扫描定时器**（多实例会各跑一次，幂等）；
+  **审计只写日志、会被轮转掉**，不可长期取证（见其 CCR 第 2 项）
+- **⚠ Agent 14**：根模块 `imports` 要加 `AdminReviewModule`；本模块**未改 `packages/contracts`**
+  （没有新错误码需求）
+- **⚠ 重申两条老问题（各绕过了一次）**：`toBigIntId` 缺 BIGINT 上界（Agent 03 CCR 第 8 项）、
+  `AdminOriginGuard` 重复实现（Agent 03 CCR 第 7 项）—— 都在 Agent 07 的 CCR 里重申了
 
 
 ## 更新方法（Agent 完成后照做）
