@@ -19,6 +19,8 @@ import {
   ContentType,
   DailyDisplayStyle,
   DailySectionType,
+  SourceKind,
+  SourceTier,
 } from '@signal/contracts';
 import { toArchiveEntry, toPublicEdition } from '../src/modules/daily/public-view';
 import type { EditionDetail, EditionRow } from '../src/modules/daily/repository';
@@ -59,8 +61,8 @@ function detail(): EditionDetail {
               source: {
                 name: 'Anthropic 官方博客',
                 slug: 'anthropic-blog',
-                kind: 'OFFICIAL',
-                tier: 'S',
+                kind: SourceKind.OFFICIAL,
+                tier: SourceTier.S,
                 official: true,
               },
             },
@@ -82,8 +84,8 @@ function detail(): EditionDetail {
               source: {
                 name: '某人的 X',
                 slug: 'x-someone',
-                kind: 'PERSON',
-                tier: 'A',
+                kind: SourceKind.PERSON,
+                tier: SourceTier.A,
                 official: false,
               },
             },

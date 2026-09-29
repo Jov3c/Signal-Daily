@@ -33,7 +33,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { ContentPipelineStatus, DailyEditionStatus } from '@signal/contracts';
+import {
+  ContentPipelineStatus,
+  DailyEditionStatus,
+  EditorialReviewStatus,
+} from '@signal/contracts';
 import { PrismaPublishingRepository } from '../src/jobs/publishing/prisma-publishing.repository';
 import { candidateWindow } from '../src/jobs/publishing/publishing.service';
 import type { PublishingSectionInput } from '../src/jobs/publishing/publishing.repository';
@@ -69,7 +73,14 @@ async function makeContent(input: {
   publishedAt: Date | null;
   createdAt?: Date;
   includeDailyCandidate?: boolean;
-  reviewStatus?: string;
+  /**
+   * ⚠ 类型用 Prisma 的枚举而不是 `string`：`prisma.content.create` 的
+   * `review.status` 是 `EditorialReviewStatus`，传 `string` 编译不过
+   *（本文件第一版正是这么写的 —— 而**根 `verify` 不检查 worker 测试的
+   * 类型**，所以它在「全绿」里藏了很久，直到 `tsc -p test/tsconfig.json`
+   * 才暴露）。
+   */
+  reviewStatus?: EditorialReviewStatus;
   sourceId?: bigint;
   eventId?: bigint | null;
   contentType?: 'ARTICLE' | 'X_POST';
@@ -89,7 +100,7 @@ async function makeContent(input: {
       eventId: input.eventId ?? null,
       review: {
         create: {
-          status: input.reviewStatus ?? 'APPROVED',
+          status: input.reviewStatus ?? EditorialReviewStatus.APPROVED,
           // `docs/10` 的候选口径之一
           includeDailyCandidate: input.includeDailyCandidate ?? true,
           publishFeatured: false,
@@ -167,7 +178,7 @@ describe('findCandidates 的候选口径（docs/10）', () => {
       label: 'review-rejected',
       pipelineStatus: ContentPipelineStatus.APPROVED,
       publishedAt: new Date('2019-05-09T12:00:00.000Z'),
-      reviewStatus: 'REJECTED',
+      reviewStatus: EditorialReviewStatus.REJECTED,
     });
 
     const candidates = await repository.findCandidates({
