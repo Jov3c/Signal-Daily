@@ -696,6 +696,27 @@ in the FeaturedModule module.
 - 真实 X / RSS 数据形态下的**多样性规则表现**（`MAJOR_SOURCE_SHARE` 是个启发式）；
 - `docs/10` 的「业务窗口」取值仍是本模块的决定（CCR 第 6 项，**需产品裁决**）。
 
+## 补充（合并到 `main` 之后又抓到一条）
+
+审查报告返回、修复完成、分支合并进 `main` 之后，**在 `main` 上复跑全套**发现
+新增的 `publishing-di-wiring.spec.ts` **红了**（`EnvValidationError: APP_BASE_URL: Required`），
+而在开发用的 worktree 里是绿的。
+
+原因：`DailyModule` / `FeaturedModule` 都提供 `ADMIN_ORIGIN_CONFIG`，
+它的工厂 `createAdminOriginConfig()` 的默认参数会调 `parseEnv()`（Agent 07 的实现）
+—— 于是**构造这两个模块**要求一份合法的 env，而两个 worktree 的
+`process.env` 恰好不同。
+
+**这条值得单独记**：它说明「在开发 worktree 里全绿」不等于「在 `main` 上全绿」，
+而本项目此前所有 Agent 都只在自己的分支上验过。
+**修法**：用 Agent 00 的 `TEST_ENV`（`packages/test-utils` 就是为这件事准备的）
+在 `beforeAll` 里只补**缺失**的键。
+
+⚠ 刻意**不用** `overrideProvider(ADMIN_ORIGIN_CONFIG)` —— 那会把本文件
+唯一要抓的那个缺陷（漏绑 `ADMIN_ORIGIN_CONFIG`）一起挡掉。
+
+修完在**两个 worktree 上分别验证**通过。
+
 ## 审查发现但**不属于本模块**的问题（§24.6：不自己改别人的行）
 
 - ⚠ **`content-db.integration.spec.ts`（Agent 05）有一条 flaky**：

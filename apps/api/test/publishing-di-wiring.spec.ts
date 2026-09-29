@@ -23,10 +23,10 @@
  * `createAuthTestApp` 接受额外的 `imports`，但那要改它的文件（§9 不越界）。
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { createLogger } from '@signal/logger';
-import { createMemoryStream } from '@signal/test-utils';
+import { TEST_ENV, createMemoryStream } from '@signal/test-utils';
 import { AUTH_CONFIG } from '../src/modules/auth/auth.config';
 import { CLOCK } from '../src/modules/auth/clock';
 import { GITHUB_CLIENT } from '../src/modules/auth/github.client';
@@ -62,6 +62,30 @@ import {
   AdminFeaturedController,
   PublicFeaturedController,
 } from '../src/modules/featured/controller';
+
+/**
+ * ⚠ **必须先把 env 补齐，否则这个文件在缺 `.env` 变量的机器/CI 上会红。**
+ *
+ * 起因：`DailyModule` / `FeaturedModule` 都提供 `ADMIN_ORIGIN_CONFIG`，
+ * 而它的工厂 `createAdminOriginConfig()` 的默认参数会调 `parseEnv()`
+ *（Agent 07 的实现）。于是**构造这两个模块**这件事本身要求一份合法的 env。
+ *
+ * 这条不是理论风险：本文件在开发用的 worktree 里是绿的，
+ * 合并到 `main` 后**立刻红了**（`EnvValidationError: APP_BASE_URL: Required`）——
+ * 两个 worktree 的 `process.env` 恰好不同。
+ * 「测试全绿」依赖运行目录里有什么文件，是一个不该被接受的巧合。
+ *
+ * 用 Agent 00 的 `TEST_ENV`（`packages/test-utils` 就是为这件事准备的）：
+ * 只补**缺失**的键，所以真实环境变量仍然优先。
+ *
+ * ⚠ 不能改成 `overrideProvider(ADMIN_ORIGIN_CONFIG)` —— 那会把本文件
+ * **唯一要抓的那个缺陷**（漏绑 `ADMIN_ORIGIN_CONFIG`）一起挡掉。
+ */
+beforeAll(() => {
+  for (const [key, value] of Object.entries(TEST_ENV)) {
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+});
 
 /** 完整的替换链（写成函数是为了能连续调用）。 */
 function buildTestingModule(imports: unknown[]): ReturnType<typeof Test.createTestingModule> {
