@@ -23,16 +23,20 @@
 
 import { toBigIntId } from '../../common/prisma/bigint-id';
 
-/** Prisma 能安全绑定的上界（有符号 64 位最大值）。 */
-export const MAX_BINDABLE_ID = 9_223_372_036_854_775_807n;
-
 /**
  * 把对外 id 字符串收敛成可安全绑定的 `bigint`。
  *
- * @returns 合法且未超界时返回 `bigint`；否则 `null`
+ * ⚠ **上界已经在源头修掉了**（`common/prisma/bigint-id.ts` 的 `MAX_BINDABLE_ID`，
+ * Agent 09 的 CCR 第 0 项 —— 那条上报了四次）。这里保留这个具名函数只是为了让
+ * 调用点读起来有语境（`toBookmarkContentId` 比 `toBigIntId` 更说明意图），
+ * **它不再做任何额外的事**。
+ *
+ * 历史：在这个洞被修掉之前，Agent 03 的 `toSourceId`、Agent 07 的 `toReviewId`、
+ * 本函数与 `reading-progress` 的 `toResourceId` **各自实现了一遍上界检查** ——
+ * 四份重复就是「没在源头修」的代价。
  */
 export function toBookmarkContentId(value: string): bigint | null {
-  const parsed = toBigIntId(value);
-  if (parsed === null || parsed > MAX_BINDABLE_ID) return null;
-  return parsed;
+  return toBigIntId(value);
 }
+
+export { MAX_BINDABLE_ID } from '../../common/prisma/bigint-id';

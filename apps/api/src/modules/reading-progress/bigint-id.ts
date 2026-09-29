@@ -13,12 +13,14 @@
 
 import { toBigIntId } from '../../common/prisma/bigint-id';
 
-/** Prisma 能安全绑定的上界（有符号 64 位最大值）。 */
-export const MAX_BINDABLE_ID = 9_223_372_036_854_775_807n;
-
-/** 把对外 id 字符串收敛成可安全绑定的 `bigint`；超界或畸形返回 `null`。 */
+/**
+ * 把对外 id 字符串收敛成可安全绑定的 `bigint`。
+ *
+ * ⚠ **上界已经在源头修掉了**（`common/prisma/bigint-id.ts` 的 `MAX_BINDABLE_ID`，
+ * Agent 09 的 CCR 第 0 项）。这里保留具名函数只为让调用点有语境，不做额外的事。
+ */
 export function toResourceId(value: string): bigint | null {
-  const parsed = toBigIntId(value);
-  if (parsed === null || parsed > MAX_BINDABLE_ID) return null;
-  return parsed;
+  return toBigIntId(value);
 }
+
+export { MAX_BINDABLE_ID } from '../../common/prisma/bigint-id';

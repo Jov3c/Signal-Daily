@@ -308,11 +308,13 @@ describe('端到端：调度器入队 → Worker 消费', () => {
     // `{sourceId, trigger: 'manual', requestedAt}`，并提交了 CCR 第 2 项
     // 请求固化这个形状。这里用**它文档里写的字面形状**喂进来，
     // 确认消费端不需要任何额外约定。
+    // ⚠ `satisfies` 而不是 `as`：`trigger` 收窄成 `'manual' | 'schedule'`，
+    // 同时保留字面量的精确类型（写错取值会编译失败）。
     const agent03Payload = {
       sourceId: '29836860',
       trigger: 'manual',
       requestedAt: '2026-09-24T01:00:56.616Z',
-    };
+    } satisfies CollectorFetchSourcePayload;
 
     const runs: CollectorFetchSourcePayload[] = [];
     const fakeService = {

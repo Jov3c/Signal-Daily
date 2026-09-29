@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Prisma } from '@prisma/client';
 import { RawItemStatus, SourceKind, SourceTier, SourceType } from '@signal/contracts';
 import { PrismaService } from '../src/jobs/collectors/prisma.service';
 import { PrismaCollectorSourceRepository } from '../src/jobs/collectors/prisma-source.repository';
@@ -84,7 +85,12 @@ async function createTestSource(options: {
   nextFetchAt?: Date | null;
   fetchIntervalSeconds?: number;
   type?: SourceType;
-  config?: Record<string, unknown> | null;
+  /**
+   * ⚠ 用 Prisma 的 `InputJsonValue` 而不是 `Record<string, unknown>`：
+   * 后者不是 JSON 兼容类型（它允许 `undefined` / 函数 / 类实例），
+   * 所以 `prisma.source.create` 的类型会拒收它。
+   */
+  config?: Prisma.InputJsonValue | null;
 }): Promise<string> {
   const row = await prisma.source.create({
     data: {
@@ -100,7 +106,19 @@ async function createTestSource(options: {
       fetchIntervalSeconds: options.fetchIntervalSeconds ?? 1800,
       enabled: options.enabled ?? true,
       nextFetchAt: options.nextFetchAt === undefined ? null : options.nextFetchAt,
-      config: options.config === undefined ? { maxItems: 50 } : options.config,
+      // ⚠ 三个分支各不相同，别合并：
+      //   undefined → 用本模块的默认值
+      //   null      → **SQL NULL**（Prisma 要求显式 DbNull；直接传 `null`
+      //               会被类型拒绝，因为它对 Json 列是有歧义的）
+      //   对象      → 原样写入
+      // 「config 为 NULL 时读成 null（不是 {}）」是一条**真库**断言，
+      // 所以这里必须真的写出 SQL NULL。
+      config:
+        options.config === undefined
+          ? { maxItems: 50 }
+          : options.config === null
+            ? Prisma.DbNull
+            : options.config,
     },
     select: { id: true },
   });

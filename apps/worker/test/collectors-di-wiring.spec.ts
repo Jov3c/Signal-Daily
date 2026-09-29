@@ -68,6 +68,8 @@ import { InMemorySourceFetchQueue, InMemorySourceLock } from './support/collecto
  * 整个 Worker 的装配由 **Agent 14** 在集成阶段用真实的 `WorkerModule` 验。
  */
 const COLLECTORS_SRC = fileURLToPath(new URL('../src/jobs/collectors', import.meta.url));
+/** Worker 的 `src` 根 —— 用于把绝对路径裁成可读的相对路径。 */
+const WORKER_SRC = fileURLToPath(new URL('../src', import.meta.url));
 
 /**
  * 一份自洽的配置：不依赖任何真实 env。

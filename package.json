@@ -24,7 +24,7 @@
     "db:seed": "tsc -b prisma && prisma db seed",
     "db:studio": "prisma studio",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\" \"prisma/dist\" \"packages/*/*.tsbuildinfo\" \"apps/*/*.tsbuildinfo\" \"*.tsbuildinfo\"",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test"
+    "verify": "pnpm lint && pnpm typecheck && pnpm -r typecheck && pnpm test"
   },
   "prisma": {
     "seed": "node prisma/dist/seed.js"

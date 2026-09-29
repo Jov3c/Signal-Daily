@@ -19,7 +19,7 @@ import { Test } from '@nestjs/testing';
 import type { INestApplication, Type } from '@nestjs/common';
 import { SourcesModule } from '../../src/modules/sources/module';
 import { SOURCE_CLOCK } from '../../src/modules/sources/clock';
-import { SOURCE_REPOSITORY, type SourceRepository } from '../../src/modules/sources/repository';
+import { SOURCE_REPOSITORY } from '../../src/modules/sources/repository';
 import { SOURCE_FETCH_ENQUEUER } from '../../src/modules/sources/source-enqueuer';
 import { SOURCE_TESTER, SOURCE_TESTER_DEPS } from '../../src/modules/sources/source-tester';
 import { SOURCE_CONFIG, type SourceConfig } from '../../src/modules/sources/source.config';
@@ -80,7 +80,17 @@ export type SourcesTestApp = {
   app: INestApplication;
   baseUrl: string;
   request(path: string, init?: RequestInit & { cookie?: string }): Promise<Response>;
-  sources: SourceRepository;
+  /**
+   * ⚠ 声明成**替身类型**而不是 `SourceRepository` 端口。
+   *
+   * 用例需要读替身内部的 Map（`app.sources.rows.get(...)`）来断言
+   * 「enable/disable 不重置 `nextFetchAt`」这类**没有被接口暴露**的状态。
+   * 声明成端口时那些访问是类型错误（`rows` 不在端口上）——
+   * 而根 `verify` 不检查测试文件的类型，所以它一直没被发现
+   *（见 Agent 09 的 CCR 第 5 项）。
+   * 改成替身类型是**类型级**修改，运行时对象没有任何变化。
+   */
+  sources: InMemorySourceRepository;
   tester: FakeSourceTester;
   enqueuer: FakeSourceFetchEnqueuer;
   clock: FakeSourceClock;
@@ -106,7 +116,13 @@ export async function createSourcesTestApp(
      * 用途：构造**竞态**场景 —— 例如「预检说没有、插入时撞唯一约束」，
      * 那是「先查后写」的真实并发形态，只有这样才能走到 P2002 兜底分支。
      */
-    sourceRepository?: SourceRepository;
+    /**
+     * ⚠ 收窄到**替身类型**：所有调用方传的都是 `InMemorySourceRepository`
+     * （或它的子类 `RacingRepository`），而返回的对象类型要求有 `rows`。
+     * 声明成端口会让返回值的赋值变成类型错误 —— 那是**类型级**修正，
+     * 运行时行为不变。
+     */
+    sourceRepository?: InMemorySourceRepository;
   } = {},
 ): Promise<SourcesTestApp> {
   const authConfig = createTestAuthConfig();
