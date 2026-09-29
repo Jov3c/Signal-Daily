@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-24 · Agent 04
+**最后更新：** 2026-09-29 · Agent 05
 
 ---
 
@@ -18,7 +18,7 @@
 | 1    | **03** | Source Registry / X 白名单       | 00, 01, 02                                | ✅ 已完成 | `84214d3` `22d9dd9` `917388b` `0d2ee19` `3306ed1` `a496ea2` `967df9d` | [agent-03-HANDOFF.md](./agent-03-HANDOFF.md) |
 | 1    | **06** | AI Provider / Score              | 00, 01                                    | ✅ 已完成 | `56335c7` `dae01be` `2a7eb2b`                                         | [agent-06-HANDOFF.md](./agent-06-HANDOFF.md) |
 | 1B   | **04** | Collectors                       | 00, 01, 03                                | ✅ 已完成 | `c88c935` `c0100d6`                                                   | [agent-04-HANDOFF.md](./agent-04-HANDOFF.md) |
-| 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ⬜ 未开始 | —                                                                     | —                                            |
+| 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ✅ 已完成 | `5b35240` `6f359f9`                                                  | [agent-05-HANDOFF.md](./agent-05-HANDOFF.md) |
 | 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ⬜ 未开始 | —                                                                     | —                                            |
 | 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ⬜ 未开始 | —                                                                     | —                                            |
 | 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ⬜ 未开始 | —                                                                     | —                                            |
@@ -46,11 +46,12 @@
 
 | Agent  | 说明                                                                                                                                                                                   |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **05** | 上游 00、01、04、06 **均已完成 → 已解锁**。开工前必读 Agent 04 HANDOFF 的两节：「给 Agent 05」与「§23 补遗的 7 条行为变更」（正文不做清洗、幂等第 3 条归你、游标不再表示「已处理完」） |
+| **07** | 上游 00、01、02、03、05、06 **均已完成 → 已解锁**。开工前必读 Agent 05 HANDOFF 的「给 Agent 07」：审核行**由 05 创建**、`ai_analysis` 的分区读法、`ContentTopic.confidence` 恒为 1 |
 | **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences                                                                                                                     |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 与 Wave 1B 均已全部完成**（02 / 03 / 04 / 06）；Wave 2 的 **09** 可开工。
+> **Wave 1 / 1B 已全部完成**（02 / 03 / 04 / 05 / 06）；Wave 2 的 **07** 与 **09** 可开工。
+> ⚠ **Agent 08 仍缺上游 07**（Featured / Daily 的上游是 00,01,05,06,07）。
 
 ---
 
@@ -58,19 +59,19 @@
 
 无。
 
-> ⚠ 有两项**已知集成缺口**（不阻塞 05 / 09，但 Agent 14 必做）：
+> ⚠ 有两项**已知集成缺口**（不阻塞 07 / 09，但 Agent 14 必做）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`，
 >    因此 `node apps/api/dist/main.js` 起真实进程时 `/api/v1/auth/*` 与
 >    `/api/v1/admin/sources/*` 全是 404。
-> 2. `apps/worker/src/worker.module.ts` 尚未挂载 `CollectorsModule`（Agent 04）与
->    `AiWorkerModule`（Agent 06），因此 worker 起真实进程时**不会采集、也不会跑 AI**。
->    两个模块都会在 `onModuleInit` 真启动 BullMQ 消费者 —— 需要一个**统一的**
->    测试期开关，别让各模块自己发明（Agent 06 也提过这一点）。
+> 2. `apps/worker/src/worker.module.ts` 尚未挂载 `CollectorsModule`（Agent 04）、
+>    `AiWorkerModule`（Agent 06）与 `ContentPipelineModule`（Agent 05），
+>    因此 worker 起真实进程时**不会采集、不会跑 AI、也不会跑流水线**。
+>    三个模块都会在 `onModuleInit` 真启动 BullMQ 消费者（05 还多一个 60 秒定时器）
+>    —— 需要一个**统一的**测试期开关，别让各模块自己发明（Agent 06 也提过这一点）。
 >
 > 详见下方各 Agent 的要点。
 
----
 
 ## 已完成 Agent 的要点速查
 
@@ -216,6 +217,41 @@
   `ai_runs` 可能残留永远 `RUNNING` 的行，建议加巡检
 
 ---
+
+### Agent 05 — Content Pipeline / Event / Evidence
+
+**⚠ 本模块未做 §23 独立审查**（用户明确要求「一个 agent 开发就行」）。
+HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经验
+（Agent 00/01 查出 6 个真 bug、Agent 06 查出 1 个 P0，都在全绿状态下），
+**建议 Agent 14 在集成前补一次审查**。
+
+- 交付整条流水线：`RawItem → Normalize（HTML 清洗 + 正文提取）→ Exact Dedup
+  → Near Dedup → Event Cluster → Evidence Attach → AI 衔接 → Review Queue`
+  + `content-pipeline` 消费者 + 60 秒收尾扫描
+- **⚠ 破坏性变更 / 下游必看**：
+  1. **`contents.body_original` 存的是已清洗的 HTML** —— `docs/14` 的清洗点在本模块。
+     **不要再渲染未清洗的内容**（Agent 10 / 13）；
+  2. `EditorialReview(PENDING)` **由本模块创建**（不是 Agent 07）；
+  3. `ContentTopic.confidence` **恒为 1**（模型没给逐主题置信度，**没有编造**）；
+  4. `contents.language` 可能是 **`und`**（来源没给语言时不猜）；
+  5. 入库的 `Content` **恰好一行对应一份内容** —— 精确重复的只留
+     `raw_items.status = DUPLICATE`，不建 Content
+- **⚠ Agent 07 必读**：审核队列直接查 `EditorialReview(status=PENDING)`；
+  `ai_analysis` 读法是 `aiAnalysis.score.*`；事件与证据看
+  `Event.primaryContentId` / `EventContent.relation` / `EventEvidence.isPrimary`
+- **⚠ Agent 11 / 14 必读**：
+  1. **引用 `ContentPipelineModule` 会真的起消费者 + 一个 60 秒定时器**
+     （与 Agent 04/06 同性质）——需要**统一的**测试期开关；
+  2. **收尾扫描是幂等的，所以没加分布式锁**（与 Agent 04 的调度器不同）；
+  3. `raw_items.status = FAILED` 是**终态**，本模块不会自动重试；
+  4. worker 侧重复实现已达 **6 处**（见 CCR 第 2 项）
+- **⚠ 本模块最贵的一次查询**：近似判重要读回候选正文（7 天窗口 / 最多 50 条）。
+  规模化方案是持久化指纹（MinHash/LSH），V1 明确不做
+- **契约缺口（已提 CCR）**：`JobId.normalize` 是 2 段会被 BullMQ 拒绝
+  （**重申 Agent 06 第 0 项，仍未裁决**）；`docs/13` 没给 content-pipeline 定重试策略；
+  `CollectedItem.type` 在采集端落库时被丢弃
+- **未新增任何 env**；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 2 个码
+
 
 ## 更新方法（Agent 完成后照做）
 
