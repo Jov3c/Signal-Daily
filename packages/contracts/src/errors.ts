@@ -238,6 +238,58 @@ export const DomainErrorCode = {
    * 不可重试。
    */
   CONTENT_EMPTY: 'CONTENT_EMPTY',
+
+  /* ---------------------------------------------------------------- */
+  /* Agent 08 — Featured / Daily 发布                                  */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * 该内容不在精选里（或 id 根本不存在）。
+   *
+   * 与平台码 `NOT_FOUND` 的分工：这里的主体是**精选项**，
+   * 而不是被引用的内容 —— 内容存在但没有被选中也是这个码。
+   */
+  FEATURED_NOT_FOUND: 'FEATURED_NOT_FOUND',
+  /**
+   * 这条内容**还不能进精选**。
+   *
+   * `docs/10`：「Content APPROVED 且勾选 Featured 后创建 FeaturedItem」——
+   * 两道门（`pipeline_status = APPROVED` 与 `review.publish_featured = true`）
+   * 缺任何一道都是这个码。`details` 里带上当前状态，便于后台给出可读原因。
+   */
+  FEATURED_NOT_ELIGIBLE: 'FEATURED_NOT_ELIGIBLE',
+  /**
+   * 这条内容已经是精选了。
+   *
+   * 由 `featured_items.content_id` 的唯一约束产生（**不是**先查后写：
+   * 那之间有并发窗口）。与 `FEATURED_NOT_ELIGIBLE` 分开是因为语义不同：
+   * 一个该去做审核，一个什么都不用做。
+   */
+  FEATURED_ALREADY_EXISTS: 'FEATURED_ALREADY_EXISTS',
+
+  /** 该业务日没有日报期次（或 id 不可绑定）。 */
+  DAILY_EDITION_NOT_FOUND: 'DAILY_EDITION_NOT_FOUND',
+  /**
+   * 当前状态不允许这个动作（`docs/05` 的 `DailyEditionStatus` 状态机）。
+   *
+   * 典型：对 `DRAFT` 调用发布、对 `PUBLISHED` 调用取消、对 `PUBLISHED` 编辑。
+   * `details` 里带 `from` / `to`，后台可以直接说清「现在是什么状态」。
+   */
+  DAILY_INVALID_TRANSITION: 'DAILY_INVALID_TRANSITION',
+  /**
+   * 发布前校验未通过（`docs/10` 的 Publish Preflight）。
+   *
+   * `details.issues` 是逐条的 `{reason, message, target}` ——
+   * **不是布尔**：管理员需要知道是「缺 LEAD」还是「某条内容被撤了」。
+   */
+  DAILY_PREFLIGHT_FAILED: 'DAILY_PREFLIGHT_FAILED',
+  /**
+   * 这一期已经发布过了，不能再次发布。
+   *
+   * 与 `DAILY_INVALID_TRANSITION` 分开：它不是「顺序错了」，
+   * 而是「这件事已经完成了」—— 后台可以据此提示「已发布，去看归档」。
+   */
+  DAILY_ALREADY_PUBLISHED: 'DAILY_ALREADY_PUBLISHED',
 } as const;
 
 export type DomainErrorCodeValue = (typeof DomainErrorCode)[keyof typeof DomainErrorCode];
