@@ -78,14 +78,13 @@
 >    Agent 12 / 13 / 14 若新建用到该守卫的模块，请照做。
 >    （详情见 `agent-08-HANDOFF.md` 的补遗。）
 >
-> 4. ⚠ **测试文件的类型错误对 `pnpm verify` 不可见**：根 `typecheck` 只跑
->    `tsc -b`（不含测试），而 `apps/api` / `apps/worker` 各自那条**会**检查测试的
->    `typecheck` 脚本**从未被根命令调用**。已复现两次（Agent 07 记录过、
->    Agent 09 又抓到 10 个）。建议把 `pnpm -r typecheck` 收进根 `verify`
->    （Agent 09 的 CCR 第 5 项）。在那之前，提交前请手动跑
->    `npx tsc -p apps/api/test/tsconfig.json --noEmit` 与 worker 的同名命令。
->    当前既有错误：api **5** 个（Agent 03 的 `sources-api.spec.ts`）、
->    worker **3** 个（Agent 04 的 `collectors-*.spec.ts`）。
+> 4. ✅ **已修**（2026-09-29，`d7b828e`）：**测试文件的类型错误现在会被 `verify` 抓到**。
+>    根 `verify` 已改成 `... && pnpm -r typecheck && ...`，于是 `apps/api` /
+>    `apps/worker` 各自那条**会检查测试**的 typecheck 真的会跑。
+>    同时修掉了 8 个既有测试类型错误（Agent 03 的 5 个、Agent 04 的 3 个），
+>    并补上了 `common/prisma/bigint-id.ts` 缺失的 BIGINT 上界
+>    （**被上报四次**的那个洞；该文件此前零测试，现在有 `common-bigint-id.spec.ts`）。
+>    **提交前请跑 `pnpm verify`**，它现在包含测试类型检查。
 >
 > 详见下方各 Agent 的要点。
 

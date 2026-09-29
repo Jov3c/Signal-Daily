@@ -10,7 +10,10 @@
 
 ---
 
-## 0. ⚠️ 第四次：`common/prisma/bigint-id.ts` 缺 BIGINT 上界
+## 0. ✅ **已解决**（2026-09-29，`d7b828e`）：`common/prisma/bigint-id.ts` 缺 BIGINT 上界
+
+> **本项与第 5 项已由用户批准后修复**（Agent 09 合并入 main 之后）。
+> 下面的原文保留 —— 它是这个洞被重复上报四次的记录，对后来者仍有意义。
 
 **这不是新问题** —— 这是**第四个**被它打到的 Agent。
 
@@ -26,10 +29,10 @@
 
 **上报历史**：
 
-| 谁 | 在哪 |
-| -- | ---- |
-| Agent 03 | 其 CCR 第 8 项 |
-| Agent 07 | 其 CCR 里重申（并自建 `toReviewId`） |
+| 谁           | 在哪                                               |
+| ------------ | -------------------------------------------------- |
+| Agent 03     | 其 CCR 第 8 项                                     |
+| Agent 07     | 其 CCR 里重申（并自建 `toReviewId`）               |
 | **Agent 09** | 本项（`bookmarks` 与 `reading-progress` 各收一次） |
 
 ### Requested Change
@@ -43,7 +46,7 @@ export const MAX_BINDABLE_ID = 9_223_372_036_854_775_807n;
 export function toBigIntId(value: string): bigint | null {
   if (!BIGINT_ID_PATTERN.test(value)) return null;
   const parsed = BigInt(value);
-  return parsed > MAX_BINDABLE_ID ? null : parsed;   // ← 新增
+  return parsed > MAX_BINDABLE_ID ? null : parsed; // ← 新增
 }
 ```
 
@@ -205,7 +208,12 @@ Admin 表格可用 page/pageSize」—— 收藏是**个人列表**，两套都�
 
 ---
 
-## 5. ⚠️ 测试文件的类型错误对 CI **不可见**（本次又抓到 10 个）
+## 5. ✅ **已解决**（2026-09-29，`d7b828e`）：测试文件的类型错误对 CI **不可见**
+
+> **已修**：根 `verify` 改为 `... && pnpm -r typecheck && ...`，8 个既有错误也一并修掉了。
+> 下面的原文保留（它是这个洞复现两次的记录）。
+
+### 原文
 
 ### Current Problem
 
@@ -258,13 +266,13 @@ apps/worker/test/collectors-queue.integration.spec.ts  ×1   Agent 04
 
 ## 汇总：哪些影响下游
 
-| 项 | 影响 | 是否阻塞 |
-| -- | ---- | -------- |
-| 0. `toBigIntId` 缺上界（第四次） | Agent 02 / 03 / 07 / 14 | ❌ 不阻塞（各自已绕过） |
-| 1. `PUT /reading-progress` 请求体形状 | **Agent 13** | ❌（实现已可用） |
-| 2. `GET /bookmarks` 分页与响应形状 | **Agent 13** | ❌ |
-| 3. `PUT /me/preferences` 的 PUT 语义 | Agent 12 / 13 | ❌（按 A 实现） |
-| 4. `CONTENT_NOT_VISIBLE` 跨模块复用 | Agent 10 | ❌ |
-| 5. 测试类型检查的洞 | **所有 Agent** | ❌ |
+| 项                                    | 影响                    | 是否阻塞                |
+| ------------------------------------- | ----------------------- | ----------------------- |
+| 0. `toBigIntId` 缺上界（第四次）      | Agent 02 / 03 / 07 / 14 | ❌ 不阻塞（各自已绕过） |
+| 1. `PUT /reading-progress` 请求体形状 | **Agent 13**            | ❌（实现已可用）        |
+| 2. `GET /bookmarks` 分页与响应形状    | **Agent 13**            | ❌                      |
+| 3. `PUT /me/preferences` 的 PUT 语义  | Agent 12 / 13           | ❌（按 A 实现）         |
+| 4. `CONTENT_NOT_VISIBLE` 跨模块复用   | Agent 10                | ❌                      |
+| 5. 测试类型检查的洞                   | **所有 Agent**          | ❌                      |
 
 **没有一项阻塞本次交付。**
