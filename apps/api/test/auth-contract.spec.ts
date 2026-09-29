@@ -217,6 +217,13 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     // Agent 07：审核队列 / Evidence / Dashboard（docs/04 的 Admin Review 与
     // Admin Event / Evidence 两节 + docs/09 的 Dashboard）。
     'modules/admin-review/controller.ts',
+    // Agent 08：精选与日报的发布/编排（docs/04 的 Admin Publishing 段）。
+    // ⚠ `docs/04` 只写了「沿用 v1.0 的 Featured / Daily API」，而 v1.0 不在
+    // 本开发包里，因此具体路径是 Agent 08 定义并提了 CCR 的
+    //（`contracts/openapi-outline.yaml` 里固定的那一条
+    //  `POST /admin/daily/{date}/publish` 与实现逐字一致）。
+    'modules/featured/controller.ts',
+    'modules/daily/controller.ts',
   ];
 
   /**

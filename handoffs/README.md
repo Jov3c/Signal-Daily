@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-29 · Agent 07
+**最后更新：** 2026-09-29 · Agent 08
 
 ---
 
@@ -18,10 +18,10 @@
 | 1    | **03** | Source Registry / X 白名单       | 00, 01, 02                                | ✅ 已完成 | `84214d3` `22d9dd9` `917388b` `0d2ee19` `3306ed1` `a496ea2` `967df9d` | [agent-03-HANDOFF.md](./agent-03-HANDOFF.md) |
 | 1    | **06** | AI Provider / Score              | 00, 01                                    | ✅ 已完成 | `56335c7` `dae01be` `2a7eb2b`                                         | [agent-06-HANDOFF.md](./agent-06-HANDOFF.md) |
 | 1B   | **04** | Collectors                       | 00, 01, 03                                | ✅ 已完成 | `c88c935` `c0100d6`                                                   | [agent-04-HANDOFF.md](./agent-04-HANDOFF.md) |
-| 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ✅ 已完成 | `5b35240` `6f359f9`                                                  | [agent-05-HANDOFF.md](./agent-05-HANDOFF.md) |
-| 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ✅ 已完成 | `a31ff19`                                                         | [agent-07-HANDOFF.md](./agent-07-HANDOFF.md) |
+| 1B   | **05** | Pipeline / Event / Evidence      | 00, 01, 04, 06                            | ✅ 已完成 | `5b35240` `6f359f9`                                                   | [agent-05-HANDOFF.md](./agent-05-HANDOFF.md) |
+| 2    | **07** | Admin Review / Evidence API      | 00, 01, 02, 03, 05, 06                    | ✅ 已完成 | `a31ff19`                                                             | [agent-07-HANDOFF.md](./agent-07-HANDOFF.md) |
 | 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ⬜ 未开始 | —                                                                     | —                                            |
-| 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ⬜ 未开始 | —                                                                     | —                                            |
+| 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ✅ 已完成 | `3675787`                                                             | [agent-08-HANDOFF.md](./agent-08-HANDOFF.md) |
 | 3    | **10** | Search / Public API              | 00, 01, 02, 05, 08, 09                    | ⬜ 未开始 | —                                                                     | —                                            |
 | 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ⬜ 未开始 | —                                                                     | —                                            |
 | 3    | **12** | Admin UI                         | 02, 03, 07, 08, 10                        | ⬜ 未开始 | —                                                                     | —                                            |
@@ -44,12 +44,13 @@
 
 ## 当前可开工
 
-| Agent  | 说明                                                                                                                                                                                   |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences                                                                                                                     |
+| Agent  | 说明                                                               |
+| ------ | ------------------------------------------------------------------ |
+| **09** | 上游 00、01、02 均已完成；V1 只做 Bookmark / Reading / Preferences |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 / 1B / 2 已全部完成**（02 / 03 / 04 / 05 / 06 / 07）；**Wave 2B 的 08 与 Wave 2 的 09 可开工**。
+> **Wave 1 / 1B / 2 / 2B 已全部完成**（02 / 03 / 04 / 05 / 06 / 07 / 08）。
+> **现在只剩 09 可以开工**（10 依赖 09，12 依赖 10，13 依赖 09 + 10）。
 
 ---
 
@@ -57,20 +58,26 @@
 
 无。
 
-> ⚠ 有两项**已知集成缺口**（不阻塞 08 / 09，但 Agent 14 必做）：
+> ⚠ 有**三项**已知集成缺口（不阻塞 09，但 Agent 14 必做）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
->    + `AdminReviewModule`（Agent 07），
->    因此 `node apps/api/dist/main.js` 起真实进程时 `/api/v1/auth/*` 与
->    `/api/v1/admin/sources/*` 全是 404。
+>    - `AdminReviewModule`（Agent 07），
+>      因此 `node apps/api/dist/main.js` 起真实进程时 `/api/v1/auth/*` 与
+>      `/api/v1/admin/sources/*` 全是 404。
 > 2. `apps/worker/src/worker.module.ts` 尚未挂载 `CollectorsModule`（Agent 04）、
 >    `AiWorkerModule`（Agent 06）与 `ContentPipelineModule`（Agent 05），
 >    因此 worker 起真实进程时**不会采集、不会跑 AI、也不会跑流水线**。
 >    三个模块都会在 `onModuleInit` 真启动 BullMQ 消费者（05 还多一个 60 秒定时器）
 >    —— 需要一个**统一的**测试期开关，别让各模块自己发明（Agent 06 也提过这一点）。
 >
+> 3. ⚠ **Agent 08 的 `DailyModule` / `FeaturedModule` 必须提供
+>    `ADMIN_ORIGIN_CONFIG`**（它们都用 `AdminOriginGuard`）。这一点**已在模块里修好**，
+>    但它是**只在真实集成时才会暴露**的一类缺陷：少了它，模块能编译、
+>    能通过全部单测，一挂进 `app.module.ts` 就**启动即崩**。
+>    Agent 12 / 13 / 14 若新建用到该守卫的模块，请照做。
+>    （详情见 `agent-08-HANDOFF.md` 的补遗。）
+>
 > 详见下方各 Agent 的要点。
-
 
 ## 已完成 Agent 的要点速查
 
@@ -225,8 +232,8 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
 **建议 Agent 14 在集成前补一次审查**。
 
 - 交付整条流水线：`RawItem → Normalize（HTML 清洗 + 正文提取）→ Exact Dedup
-  → Near Dedup → Event Cluster → Evidence Attach → AI 衔接 → Review Queue`
-  + `content-pipeline` 消费者 + 60 秒收尾扫描
+→ Near Dedup → Event Cluster → Evidence Attach → AI 衔接 → Review Queue`
+  - `content-pipeline` 消费者 + 60 秒收尾扫描
 - **⚠ 破坏性变更 / 下游必看**：
   1. **`contents.body_original` 存的是已清洗的 HTML** —— `docs/14` 的清洗点在本模块。
      **不要再渲染未清洗的内容**（Agent 10 / 13）；
@@ -251,7 +258,6 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
   `CollectedItem.type` 在采集端落库时被丢弃
 - **未新增任何 env**；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 2 个码
 
-
 ### Agent 07 — Admin Review / Evidence API
 
 **⚠ 本模块未做 §23 独立审查**（与 Agent 05 同一处理，用户要求「一个 agent 开发就行」）。
@@ -274,6 +280,40 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
 - **⚠ 重申两条老问题（各绕过了一次）**：`toBigIntId` 缺 BIGINT 上界（Agent 03 CCR 第 8 项）、
   `AdminOriginGuard` 重复实现（Agent 03 CCR 第 7 项）—— 都在 Agent 07 的 CCR 里重申了
 
+### Agent 08 — Featured / Daily 发布
+
+**先读 HANDOFF 的补遗章节**：正文的实现描述在 §23 独立审查**之前**就已成立，
+但审查仍查出 **1 个 P1 + 1 个 P2 + 4 个 P3/P4**，已全部修复并加了有牙齿的回归守卫。
+
+- 交付 `/api/v1/admin/featured` 的 4 条 + `/api/v1/admin/daily` 的 6 条 +
+  公开的 `GET /featured` / `GET /daily/:date` / `GET /daily/archive`
+- `apps/worker/src/jobs/publishing/**`：草稿生成、08:00 定时发布、五槽调度器
+- **⚠ 破坏性变更（下游必看）**：
+  1. **`POST /admin/daily/:date/schedule` 不接受任何参数**（传了就 400）——
+     排期固定用该业务日的上海 08:00；要立刻发出走 `POST …/publish`；
+  2. `POST …/publish` 成功返回 `{edition, editionNoLabel}`（**没有** `published` 字段），
+     失败一律抛错：`DAILY_INVALID_TRANSITION` / `DAILY_ALREADY_PUBLISHED` /
+     `DAILY_PREFLIGHT_FAILED`（`details.issues` 请逐条显示）；
+  3. **全 X 候选的日子，自动草稿会把分数最高的 X 提到 `FRONT_PAGE` 当头条**
+     （此前它只进 `X_VOICES`）；
+  4. `GET /admin/daily/:date` 会**惰性补建当天期次**（幂等，只建空行）
+- **⚠ 需产品裁决**：`docs/10` 的「业务窗口」**没有定义**，
+  本模块取了「该业务日 08:00 前的 24 小时」。见其 CCR 第 6 项
+- **⚠ 复用勿重造**：`preflight.ts` 在 api 与 worker **各一份、逐字相同**，
+  由 `apps/api/test/daily-preflight-parity.spec.ts` 静态比对全文钉住 ——
+  **改一份必须逐字改另一份**；状态机从 `modules/daily/state.ts` 取，
+  别在前端重写按钮可用性判断
+- **⚠ Agent 12**：Admin 路由形状**由本模块定义**（`docs/04` 只写了
+  「沿用 v1.0」，而 v1.0 不在开发包里），完整表见其 CCR 第 1 项
+- **⚠ Agent 14 必做**：根模块 `imports` 加 `FeaturedModule` + `DailyModule`；
+  worker 加 `PublishingModule`（会起消费者 + **每分钟醒一次的调度器**）；
+  **不要再注册全局异常过滤器**
+- **⚠ Agent 11**：Redis 是硬依赖；调度器**没有分布式锁**（靠 JobId 幂等兜底）；
+  ⚠ **「到点但没排期 → 不发」在 `job_runs` 里记 `SUCCEEDED`**（那是业务结论，
+  不是故障）；**已取消的期次在 08:00 不发提醒**（`reason: CANCELLED`）
+- **⚠ 未修复但已上报**：`JobId.dailyDraft` 仍是 2 段、会被 BullMQ 拒绝
+  （Agent 06 CCR 第 0 项，本模块**第三次**重申并补了真 Redis 证据）
+- 未新增任何 env；未改 Prisma / 未建 Migration；`errors.ts` 仅**追加** 7 个码（0 删除）
 
 ## 更新方法（Agent 完成后照做）
 
