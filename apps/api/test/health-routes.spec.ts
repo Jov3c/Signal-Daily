@@ -340,9 +340,7 @@ describe('探针覆盖不变式（漏接一个依赖会让 readiness 永远 ok�
   });
 
   it('齐全时通过', () => {
-    expect(() =>
-      assertProbesCoverDependencies([up('mysql'), up('redis')]),
-    ).not.toThrow();
+    expect(() => assertProbesCoverDependencies([up('mysql'), up('redis')])).not.toThrow();
   });
 
   it('⚠ 少一个依赖 → 抛（否则 readiness 从不检查它却报 ok）', () => {
@@ -350,9 +348,9 @@ describe('探针覆盖不变式（漏接一个依赖会让 readiness 永远 ok�
   });
 
   it('重复 → 抛', () => {
-    expect(() =>
-      assertProbesCoverDependencies([up('mysql'), up('redis'), up('mysql')]),
-    ).toThrow(/重复探针/);
+    expect(() => assertProbesCoverDependencies([up('mysql'), up('redis'), up('mysql')])).toThrow(
+      /重复探针/,
+    );
   });
 
   it('未声明的依赖 → 抛（docs/15 只允许 MySQL 与 Redis 决定 readiness）', () => {
@@ -363,9 +361,9 @@ describe('探针覆盖不变式（漏接一个依赖会让 readiness 永远 ok�
       dependency: 'openai' as unknown as ReadinessDependency,
       probe: async (): Promise<ProbeResult> => ({ status: 'up' }),
     };
-    expect(() =>
-      assertProbesCoverDependencies([up('mysql'), up('redis'), stranger]),
-    ).toThrow(/未声明的依赖[\s\S]*openai/);
+    expect(() => assertProbesCoverDependencies([up('mysql'), up('redis'), stranger])).toThrow(
+      /未声明的依赖[\s\S]*openai/,
+    );
   });
 
   it('readiness 的允许清单就是 MySQL 与 Redis 两个（docs/15）', () => {
@@ -531,7 +529,9 @@ describe('失败归类：区分配置问题与网络问题', () => {
 
   it('⚠ Prisma 的「认证失败」→ **ERROR**，不是 UNREACHABLE（该改 secret，不是查防火墙）', () => {
     const error = Object.assign(
-      new Error('Authentication failed against database server, the provided database credentials are not valid.'),
+      new Error(
+        'Authentication failed against database server, the provided database credentials are not valid.',
+      ),
       { name: 'PrismaClientInitializationError' },
     );
     expect(classifyFailure(error)).toBe('ERROR');

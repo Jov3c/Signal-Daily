@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-30 · Agent 10
+**最后更新：** 2026-09-30 · Agent 11
 
 ---
 
@@ -23,7 +23,7 @@
 | 2    | **09** | Bookmark / Reading / Preferences | 00, 01, 02                                | ✅ 已完成 | `4f32af7`                                                             | [agent-09-HANDOFF.md](./agent-09-HANDOFF.md) |
 | 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ✅ 已完成 | `3675787`                                                             | [agent-08-HANDOFF.md](./agent-08-HANDOFF.md) |
 | 3    | **10** | Search / Public API              | 00, 01, 02, 05, 08, 09                    | ✅ 已完成 | `a7c1774`                                                             | [agent-10-HANDOFF.md](./agent-10-HANDOFF.md) |
-| 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ⬜ 未开始 | —                                                                     | —                                            |
+| 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ✅ 已完成 | `3f8e819` `4f0b8b2`                                                   | [agent-11-HANDOFF.md](./agent-11-HANDOFF.md) |
 | 3    | **12** | Admin UI                         | 02, 03, 07, 08, 10                        | ⬜ 未开始 | —                                                                     | —                                            |
 | 3    | **13** | Public Web v1.7                  | 02, 08, 09, 10                            | ⬜ 未开始 | —                                                                     | —                                            |
 | 4    | **14** | Final Integration                | **全部**                                  | ⬜ 未开始 | —                                                                     | —                                            |
@@ -44,13 +44,16 @@
 
 ## 当前可开工
 
-| Agent  | 说明                                                                             |
-| ------ | -------------------------------------------------------------------------------- |
-| **11** | 上游 00 ✅（完整部署前再读 01 / 02 / 04 / 05 / 06 / 08 / 10）；Ops / 部署 / 备份 |
+| Agent  | 说明                                       |
+| ------ | ------------------------------------------ |
+| **12** | 上游 02 / 03 / 07 / 08 / 10 ✅；Admin UI   |
+| **13** | 上游 02 / 08 / 09 / 10 ✅；Public Web v1.7 |
 
 > 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 / 1B / 2 / 2B 已全部完成**（02 / 03 / 04 / 05 / 06 / 07 / 08 / 09）。
-> **11 可以开工**；**12 / 13 的上游（10）已完成，也可开工**。
+> **Wave 1 / 1B / 2 / 2B / 3 里的 10 / 11 都已交付**（02 / 03 / 04 / 05 / 06 / 07 / 08 / 09 / 10 / 11）。
+> **剩下 12 / 13 可开工**，之后是 **14（最终集成）**。
+> ⚠ 12 / 13 都是前端，**在此之前先看 Agent 11 的要点速查** —— 起真实进程所需的
+> 挂载清单在 `agent-11-HANDOFF.md` 的 Integration Notes 里。
 
 ---
 
@@ -58,7 +61,7 @@
 
 无。
 
-> ⚠ 有**四项**已知项（不阻塞 10 / 11，但 Agent 14 必做）：
+> ⚠ 有**五项**已知项（不阻塞 12 / 13，但 Agent 14 必做）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
 >    - `AdminReviewModule`（Agent 07），
@@ -91,6 +94,12 @@
 >    ⚠ 各 Agent 要点速查里那些「JobId 仍是 2 段」的提醒**已经过时**。
 > 6. ✅ 已修（2026-09-30，`fbb6756`）：Agent 05 的 content-db 偶发 MySQL 死锁
 >    （外键 S 锁 + 唯一键查重 S 锁的环）；一条**静态顺序守卫**经变异验证有牙齿。
+> 7. ⚠ **Agent 11 发现**：`app.module.ts` 还必须挂 **`HealthModule`**
+>    （`apps/api/src/modules/health`）—— 不挂的话 compose 的 api healthcheck
+>    （打 `http://api:3001/health/ready`）永远 503，**整栈起不来**。
+>    另外 **worker 的 healthcheck 是个空壳**（`test -d /proc/1`，
+>    测不到「进程活着但消费者卡死」）—— 见 `CONTRACT_CHANGE_REQUEST-agent-11.md` 第 6 项，
+>    需要裁决。
 
 > 详见下方各 Agent 的要点。
 
@@ -374,6 +383,37 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
   搜索是 **offset 分页**（相关度不是稳定列，做不了游标）
 - **⚠ 未改**：未建 Migration、未新增 env、未改 Prisma
 - 顺带修了 Agent 05 的偶发 MySQL 死锁（外键 S 锁 + 唯一键查重 S 锁的环）
+
+### Agent 11 — 部署 / 运维 / 健康检查
+
+**⚠ 本次未做 §23 独立审查**（用户要求「不要审查那么久」），
+改用 **5 条变异反证**（全部实测，见其 HANDOFF）。仍建议补一次轻量审查，
+重点看两处：`applyApiPrefix()` 的抽取有无行为差异、
+`auth-contract.spec.ts` 放宽 `$queryRaw` 有没有削弱拦截面。
+
+- 交付 compose（6 服务 / `edge`+`internal` 双网络 / MySQL 与 Redis **无宿主端口**）+
+  nginx 同域 + 多阶段 Dockerfile + 备份恢复脚本 + deploy workflow（migration gate + 自动回滚）
+- 交付 **`apps/api/src/modules/health/**`**：`/health/live` 恒 200、`/health/ready` 全 up 才 200
+  - **⚠ `live()` 一个依赖都不查**（拿 ready 当存活探针 → 一次 MySQL 抖动会让所有 api 容器
+    被反复重启，而重启不会让 MySQL 更快恢复）
+  - **⚠ `ready()` 并行、不短路**；**503 用 `@Res` 手动设状态码，不 throw**
+    （`AppErrorFilter` 是 `@Catch()`，会把 `checks` 全吃掉）
+  - **⚠ 响应体只有 `UNREACHABLE`/`TIMEOUT`/`ERROR` 三个枚举值** —— `/health/` 在 nginx 上
+    **对外可达**，而 `redactString` 不覆盖裸的主机/端口。原始异常只进日志
+  - **⚠ 探针覆盖不变式在构造函数里断言** —— 漏接一个依赖本来会让 readiness 永远 200
+- **⚠ Agent 14 必做**：`imports: [..., HealthModule]`；**不要重复注册全局过滤器**；
+  **不要把 `/health/*` 加进任何全局守卫或拦截器**
+- **⚠ `applyApiPrefix()`（`bootstrap.ts` 新导出）**：写 HTTP 测试时**调它**，
+  不要再复制一行 `setGlobalPrefix` —— 复制等于「测试验自己那份副本」，删掉 `exclude`
+  生产会坏而测试全绿。08 / 09 / 10 的现有测试仍各复制了一份，可按需迁移
+- **⚠ 动了两个他人文件**（CCR 第 1、2 项）：Agent 00 的 `bootstrap.ts`、Agent 02 的
+  `auth-contract.spec.ts`（原生 SQL 守卫放宽到认**标签模板**本身）
+- **⚠ 缓存 TTL 的运维含义**（回答 Agent 10 的 CCR 第 3 项）：内容 60s / 元数据 300s；
+  **恢复演练后必须清缓存**（`restore-mysql.sh` 第 7 步 `FLUSHALL` 已做）
+- **⚠ TLS**：`infra/nginx/README.md`（新增）。**证书不存在时 nginx 起不来，
+  而 ACME 的 webroot 又需要 nginx** —— 首次部署必须先用自签证书占位
+- 未新增 env（探针超时是常量 `PROBE_TIMEOUT_MS = 3000`，实测边界）；
+  未改 Prisma / 未建 Migration / 未动 `app.module.ts`
 
 ## 更新方法（Agent 完成后照做）
 

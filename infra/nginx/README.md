@@ -126,10 +126,10 @@ docker compose exec nginx nginx -s reload
 
 ## 排查
 
-| 现象                                        | 原因                                                                 |
-| ------------------------------------------- | -------------------------------------------------------------------- |
-| nginx 容器反复重启，日志是 `cannot load certificate` | `infra/nginx/certs/` 里没有那两个文件 → 回到「首次部署」第 2 步      |
-| `docker compose ps` 里 nginx 一直 `starting` | `nginx -t` 没过。`docker compose exec nginx nginx -t` 看具体哪一行   |
-| 证书签不下来，报 `Timeout during connect`    | 80 端口从公网不可达（安全组 / 防火墙 / DNS 还没生效）                |
-| `https` 能开但 `http` 不跳转                 | 正常：80 那个 server 只服务 ACME challenge 与 301，业务全走 443      |
-| 前台登录后立刻掉登录态                        | 大概率是跨域了。`docs/16` 要求**同域**（`/` 与 `/api/` 同一个域名）  |
+| 现象                                                 | 原因                                                                |
+| ---------------------------------------------------- | ------------------------------------------------------------------- |
+| nginx 容器反复重启，日志是 `cannot load certificate` | `infra/nginx/certs/` 里没有那两个文件 → 回到「首次部署」第 2 步     |
+| `docker compose ps` 里 nginx 一直 `starting`         | `nginx -t` 没过。`docker compose exec nginx nginx -t` 看具体哪一行  |
+| 证书签不下来，报 `Timeout during connect`            | 80 端口从公网不可达（安全组 / 防火墙 / DNS 还没生效）               |
+| `https` 能开但 `http` 不跳转                         | 正常：80 那个 server 只服务 ACME challenge 与 301，业务全走 443     |
+| 前台登录后立刻掉登录态                               | 大概率是跨域了。`docs/16` 要求**同域**（`/` 与 `/api/` 同一个域名） |

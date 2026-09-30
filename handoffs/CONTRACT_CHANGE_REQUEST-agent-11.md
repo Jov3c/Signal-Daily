@@ -8,16 +8,16 @@
 > 按 §9 / §18：本 Agent 动了**两个不属于自己的文件**（第 1、2 项），
 > 另有 **2 项契约缺口**（第 4、5 项）与 **1 项真实部署风险**（第 6 项）。
 >
-> | # | 事项                                            | 影响                 | 阻塞 |
-> | - | ----------------------------------------------- | -------------------- | ---- |
-> | 1 | 改了 Agent 00 的 `bootstrap.ts`（加 `exclude`）  | Agent 00 / 14        | ❌ |
-> | 2 | 改了 Agent 02 的 `auth-contract.spec.ts`（守卫） | Agent 02             | ❌ |
-> | 3 | `apps/api/src/modules/health/` 不在允许目录清单里 | 流程                | ❌ |
-> | 4 | `docs/04` 的 Health 段没给形状与状态码            | Agent 12 / 13 / 14   | ❌ |
-> | 5 | 失败原因能不能外泄没有规定                        | **安全**（docs/14）  | ❌ |
-> | 6 | ⚠ **worker 的 healthcheck 是个空壳**             | **运维**（告警盲区） | ❌ |
-> | 7 | `docs/16` 的「TLS 指南」没有落点                  | 文档                | ❌ |
-> | 8 | 恢复流程里清 Redis 的时机                        | 运维                | ❌ |
+> | #   | 事项                                              | 影响                 | 阻塞 |
+> | --- | ------------------------------------------------- | -------------------- | ---- |
+> | 1   | 改了 Agent 00 的 `bootstrap.ts`（加 `exclude`）   | Agent 00 / 14        | ❌   |
+> | 2   | 改了 Agent 02 的 `auth-contract.spec.ts`（守卫）  | Agent 02             | ❌   |
+> | 3   | `apps/api/src/modules/health/` 不在允许目录清单里 | 流程                 | ❌   |
+> | 4   | `docs/04` 的 Health 段没给形状与状态码            | Agent 12 / 13 / 14   | ❌   |
+> | 5   | 失败原因能不能外泄没有规定                        | **安全**（docs/14）  | ❌   |
+> | 6   | ⚠ **worker 的 healthcheck 是个空壳**              | **运维**（告警盲区） | ❌   |
+> | 7   | `docs/16` 的「TLS 指南」没有落点                  | 文档                 | ❌   |
+> | 8   | 恢复流程里清 Redis 的时机                         | 运维                 | ❌   |
 >
 > **没有一项阻塞本次交付。**
 
@@ -93,15 +93,15 @@ export function applyApiPrefix(app: INestApplication): void {
 该文件里有一条「业务模块不得绕过 ORM 写库 / 不得拼 SQL」的守卫，规则是：
 
 ```ts
-/\$queryRaw(?!\s*(?:<[^>]*>)?\s*\(\s*Prisma\.sql)/   // 旧
+/\$queryRaw(?!\s*(?:<[^>]*>)?\s*\(\s*Prisma\.sql)/; // 旧
 ```
 
-即**只放行** `$queryRaw(Prisma.sql\`...\`)` 这一种写法。而 `$queryRaw`
+即**只放行** `$queryRaw(Prisma.sql\`...\`)`这一种写法。而`$queryRaw`
 有**两种**同样是参数化的标签模板写法：
 
 ```ts
-await prisma.$queryRaw`SELECT 1`              // 直接用
-await prisma.$queryRaw(Prisma.sql`SELECT 1`)  // 显式 Prisma.sql
+await prisma.$queryRaw`SELECT 1`; // 直接用
+await prisma.$queryRaw(Prisma.sql`SELECT 1`); // 显式 Prisma.sql
 ```
 
 两者都把 `${}` 变成绑定参数，安全性没有区别（Prisma 官方文档把第一种

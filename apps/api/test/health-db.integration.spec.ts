@@ -34,11 +34,7 @@ import { TEST_ENV } from '@signal/test-utils';
 import { APP_LOGGER } from '../src/common/logger/app-logger';
 import { HEALTH_REDIS_CLIENT, HealthModule } from '../src/modules/health/module';
 import { HEALTH_READY_PATH } from '../src/modules/health/routes';
-import {
-  createMysqlProbe,
-  createRedisProbe,
-  type SqlPinger,
-} from '../src/modules/health/probes';
+import { createMysqlProbe, createRedisProbe, type SqlPinger } from '../src/modules/health/probes';
 import { createHealthRedisClient } from '../src/modules/health/redis-client';
 
 /**

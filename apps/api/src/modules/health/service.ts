@@ -101,9 +101,7 @@ export function assertProbesCoverDependencies(
   }
 
   const missing = declared.filter((name) => !seen.has(name));
-  const undeclared = [...seen].filter(
-    (name) => !declared.includes(name as ReadinessDependency),
-  );
+  const undeclared = [...seen].filter((name) => !declared.includes(name as ReadinessDependency));
 
   const problems: string[] = [];
   if (missing.length > 0) {
@@ -158,9 +156,7 @@ export class HealthService {
    */
   async ready(): Promise<ReadyReport> {
     const results = await Promise.all(
-      this.probes.map(
-        async (probe) => [probe.dependency, await this.runOne(probe)] as const,
-      ),
+      this.probes.map(async (probe) => [probe.dependency, await this.runOne(probe)] as const),
     );
 
     // `as` 是安全的：构造函数已经断言过探针恰好覆盖全部声明依赖。

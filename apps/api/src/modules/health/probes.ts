@@ -7,12 +7,7 @@
  * Agent 06 / Agent 08 那种「测试全绿但被测代码从没跑过」。
  */
 
-import type {
-  ProbeFailureReason,
-  ProbeResult,
-  ReadinessDependency,
-  ReadinessProbe,
-} from './ports';
+import type { ProbeFailureReason, ProbeResult, ReadinessDependency, ReadinessProbe } from './ports';
 
 /* ------------------------------------------------------------------ */
 /* 窄端口 —— 只声明我们真正用到的能力                                   */
@@ -134,7 +129,8 @@ const PRISMA_UNREACHABLE_MESSAGES = ["can't reach database server", 'timed out']
 /** 取错误码：Node/ioredis 用 `code`，Prisma 用 `errorCode`。 */
 function errorCodeOf(error: unknown): string | null {
   if (typeof error !== 'object' || error === null) return null;
-  const candidate = (error as { code?: unknown }).code ?? (error as { errorCode?: unknown }).errorCode;
+  const candidate =
+    (error as { code?: unknown }).code ?? (error as { errorCode?: unknown }).errorCode;
   return typeof candidate === 'string' ? candidate : null;
 }
 
