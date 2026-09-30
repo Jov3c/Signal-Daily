@@ -59,6 +59,27 @@ function serviceBlock(source, service) {
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
+/**
+ * 取一个服务块里 **`healthcheck:` 那一段**。
+ *
+ * ⚠ 为什么不直接在服务块里找 URL：**注释和别的配置值里都会出现 URL**。
+ * 2026-10-01 实测踩到（这一条真的误报过）：给 api 服务补
+ * `APP_BASE_URL: ${PUBLIC_BASE_URL:-https://localhost}`（容器形态必需，
+ * 否则 `AdminOriginGuard` 会把后台写操作全判成跨源）之后，
+ * 「服务块里第一个 URL」就变成了它 —— 于是下面那条
+ * 「healthcheck 打的是 /health/」**误报失败**，报的是 `https://localhost`。
+ *
+ * 断言要看的是 **healthcheck 里的那个 URL**，所以必须限定到这一段。
+ * 服务块内部的一级键是 4 空格缩进，所以下一个同级键就是它的边界。
+ */
+function healthcheckBlock(serviceBlockText) {
+  const start = serviceBlockText.indexOf('healthcheck:');
+  if (start === -1) return '';
+  const rest = serviceBlockText.slice(start);
+  const next = rest.slice(1).search(/\n {4}[a-z][a-z0-9_-]*:/);
+  return next === -1 ? rest : rest.slice(0, next + 1);
+}
+
 function read(relative) {
   const path = `${ROOT}${relative}`;
   if (!existsSync(path)) return null;
@@ -192,7 +213,7 @@ if (bootstrap !== null) {
 
 if (compose !== null) {
   const apiBlock = serviceBlock(compose, 'api');
-  const url = /https?:\/\/[^\s"'\\]+/.exec(apiBlock)?.[0];
+  const url = /https?:\/\/[^\s"'\\]+/.exec(healthcheckBlock(apiBlock))?.[0];
   check('compose: api healthcheck 里有一个 URL', url !== undefined);
   check(
     'compose: api healthcheck 打的是 /health/（**不在** /api/v1 下）',

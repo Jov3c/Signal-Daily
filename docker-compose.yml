@@ -54,7 +54,23 @@ services:
     # ⚠ **没有 `ports:`** —— 见文件头第 1 条
     networks: [internal]
     command:
-      - --default-authentication-plugin=caching_sha2_password
+      # ⚠ 这里原本有一行 `--default-authentication-plugin=caching_sha2_password`，
+      # 2026-10-01 **已删除**。两个理由，任一个都足以删掉它：
+      #
+      # 1. **MySQL 8.4 把这个变量删了**（8.0.27 弃用 → 8.4 移除，改成
+      #    `--authentication-policy`）。而本服务用的是 `image: mysql:8.4`，
+      #    于是 mysqld **启动即 abort**：
+      #      [ERROR] [Server] unknown variable 'default-authentication-plugin=…'
+      #      [ERROR] [Server] Aborting
+      #    **MySQL 根本起不来**，而 api/web/worker 都 depends_on 它 healthy ——
+      #    所以整栈一个都起不来。这是 `docker compose up` 的**首个**失败点。
+      # 2. **它本来就是多余的**：8.4 的默认 `authentication_policy` 就是
+      #    `caching_sha2_password`。删掉不改变任何行为。
+      #
+      # ⚠ 它同时解释了另一个现象：abort 发生在**初始化中途**，会把
+      # `mysql-data` 卷写成半初始化状态（`Table 'mysql.plugin' doesn't exist`）。
+      # 所以修完这一行之后，**必须先把那个卷删掉再起**，否则仍然起不来。
+      #
       # binlog：`docs/16` 的 RPO <= 15min 靠它（全量 dump 每天一次，
       # 两次 dump 之间用 binlog 补齐）
       - --log-bin=/var/lib/mysql/mysql-bin
@@ -76,8 +92,7 @@ services:
     healthcheck:
       # ⚠ 用 `mysqladmin ping` 而不是 `-e 'SELECT 1'`：前者在「server 还在
       # 初始化」阶段就会失败，这正是我们要的（healthy 之后才允许别人启动）。
-      test:
-        ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent']
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent']
       interval: 10s
       timeout: 5s
       retries: 12
@@ -125,6 +140,10 @@ services:
       # compose 里的服务名就是 DNS
       DATABASE_URL: mysql://signal:${MYSQL_PASSWORD:?}@mysql:3306/signal
       REDIS_URL: redis://redis:6379
+      # ⚠ 同 `web` 服务：`AdminOriginGuard` 拿它比对浏览器发来的 Origin，
+      # 而浏览器看到的是 nginx 那一层。不覆盖的话它会是 `.env` 里的
+      # `http://localhost:3000`，于是**后台所有写操作被判跨源、返回 403**。
+      APP_BASE_URL: ${PUBLIC_BASE_URL:-https://localhost}
     depends_on:
       mysql: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -179,6 +198,17 @@ services:
     env_file: *env-file
     environment:
       NODE_ENV: production
+      # ⚠ **容器里的地址与「宿主直跑」不同**，`.env` 里那两行在这里是错的：
+      #   API_BASE_URL=http://localhost:3000/api  ← 在 web 容器里指 web **自己**
+      # 服务端渲染取数走这个值 → 请求自己 → 撞上自己的 rewrite
+      # → `http://127.0.0.1:3001`（还是自己）→ ECONNREFUSED。
+      # 2026-10-01 实测：每个前台页面都 500，日志是
+      #   Failed to proxy http://127.0.0.1:3001/api/v1/x  ECONNREFUSED
+      # compose 的服务名就是容器网络里的 DNS 名，所以是 `api:3001`。
+      API_BASE_URL: http://api:3001/api
+      # 对外基址 = 浏览器看到的那一层（nginx）。`AdminOriginGuard` 拿它比对 Origin。
+      # ⚠ 生产必须覆盖成真实域名，否则后台的写操作会被判跨源、返回 403。
+      APP_BASE_URL: ${PUBLIC_BASE_URL:-https://localhost}
     healthcheck:
       test:
         [

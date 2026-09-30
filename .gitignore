@@ -39,3 +39,10 @@ Thumbs.db
 
 # infra runtime
 infra/data/
+
+# ⚠⚠ TLS 私钥**绝不入库**。2026-10-01 实测发现：这一条原先**不存在**，
+# 而 `.dockerignore` 里早就有 `infra/nginx/certs` —— 也就是说做镜像时想到了，
+# 入库时漏了。按 `infra/nginx/README.md` 的步骤生成自签证书之后，
+# `git add -A` **会把 `privkey.pem` 提交进仓库**，而这个仓库是 public。
+# 现在补上，并把目录本身的说明留在这里。
+infra/nginx/certs/

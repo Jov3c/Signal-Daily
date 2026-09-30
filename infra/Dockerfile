@@ -50,9 +50,24 @@ RUN pnpm --filter @signal/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
-COPY --from=deps /app/apps/worker/node_modules ./apps/worker/node_modules
+# ⚠ **从 `build` 而不是 `deps` 拿 node_modules。** 两者的差别只有一处，但它是致命的：
+#
+# ```text
+# prisma generate 在 build 阶段跑（见上），生成物落在
+#   node_modules/.pnpm/@prisma+client@…/node_modules/.prisma/client
+# 而 deps 阶段**没有**它 —— 那一步 schema.prisma 还不在镜像里。
+# ```
+#
+# 从 deps 拷的后果是「**编译期绿、运行期炸**」：`tsc` 在 build 阶段看得到那些类型，
+# 所以 `pnpm build` 通过；但运行镜像里没有生成物，`@prisma/client` 的枚举是 `undefined`。
+#
+# 2026-10-01 实测（容器启动即崩，API 与 worker 都是）：
+#   /app/apps/api/dist/modules/admin-ops/prisma-admin-ops.repository.js:37
+#       [client_1.JobRunStatus.QUEUED]: contracts_1.JobRunStatus.QUEUED,
+#   TypeError: Cannot read properties of undefined (reading 'QUEUED')
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=build /app/apps/worker/node_modules ./apps/worker/node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=build /app/packages ./packages
@@ -72,4 +87,19 @@ CMD ["node", "apps/worker/dist/main.js"]
 FROM runtime AS web
 COPY --from=build /app/apps/web ./apps/web
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@signal/web", "start"]
+# ⚠ **不要用 `pnpm --filter @signal/web start`。** pnpm 启动时会先做一次
+# deps-status 校验（`runDepsStatusCheck`），而运行镜像里的 node_modules 是
+# **部分拷贝**的（只有根 + api + worker，没有 web 那一份的完整 workspace 视图）
+# → 校验直接失败，容器进入重启循环。2026-10-01 实测：
+#   at runDepsStatusCheck (…/pnpm.mjs:250510:7)
+#
+# 直接用 node 跑 next，绕开包管理器 —— 运行容器本来也不需要 pnpm。
+#
+# ⚠ **必须把 WORKDIR 切到 `apps/web`**：`next start` 是按**当前工作目录**找
+# `.next` 的，不是按 next 这个包的位置。留在 `/app` 会让它去找 `/app/.next`：
+#   [Error: Could not find a production build in the '.next' directory.]
+# 原来的 `pnpm --filter @signal/web start` 之所以没这问题，是 pnpm 会把 cwd
+# 切到那个 package 的目录 —— 换成直接 node 就把这一步丢了。
+# ⚠ 顺序要紧：WORKDIR 写在 COPY **之后**，否则 COPY 的相对目标也跟着变。
+WORKDIR /app/apps/web
+CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "3000"]
