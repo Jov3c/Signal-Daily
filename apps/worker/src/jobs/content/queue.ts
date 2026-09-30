@@ -41,6 +41,7 @@
 
 import {
   BULLMQ_JOBID_SEGMENTS,
+  isBullMqAcceptableJobId,
   JobId,
   JobName,
   JOB_TO_QUEUE,
@@ -110,12 +111,8 @@ export function normalizeJobId(rawItemId: string, version: string = NORMALIZER_V
 /** BullMQ 对自定义 jobId 的段数要求（含 `:` 时必须恰好 3 段）。 */
 export const BULLMQ_JOBID_MIN_SEGMENTS = BULLMQ_JOBID_SEGMENTS;
 
-/** 该 jobId 是否会被 BullMQ 接受。 */
-/** 段数判定（唯一实现在契约里）。 */
-export function isBullMqAcceptableJobId(jobId: string): boolean {
-  if (!jobId.includes(':')) return true;
-  return jobId.split(':').length === BULLMQ_JOBID_MIN_SEGMENTS;
-}
+/** 该 jobId 是否会被 BullMQ 接受。实现见 `@signal/contracts`，全仓唯一。 */
+export { isBullMqAcceptableJobId };
 
 /**
  * 启动期自检。

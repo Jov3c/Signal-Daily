@@ -20,6 +20,8 @@
 
 import {
   AI_RETRY,
+  BULLMQ_JOBID_SEGMENTS,
+  isBullMqAcceptableJobId,
   JobId,
   JobName,
   JOB_TO_QUEUE,
@@ -90,13 +92,13 @@ export { AI_QUEUE_NAME };
  * 而当时 886 项单测 + 21 项集成测试**全绿**
  * （集成测试自己拼 `it-<random>` 字面量，从不调用 builder）。
  */
-export const BULLMQ_JOBID_MIN_SEGMENTS = 3;
+// ⚠ 段数常量**委托契约的唯一真源**（`@signal/contracts` 的 `BULLMQ_JOBID_SEGMENTS`）。
+// 此前这里硬编码字面量 `3` —— 契约若变，本模块不会跟；`content` / `publishing`
+// 两个模块早就是契约的别名了，这里对齐。保留本名是因为它在公开面上、有测试引用。
+export const BULLMQ_JOBID_MIN_SEGMENTS = BULLMQ_JOBID_SEGMENTS;
 
-/** 该 jobId 是否会被 BullMQ 接受。 */
-export function isBullMqAcceptableJobId(jobId: string): boolean {
-  if (!jobId.includes(':')) return true;
-  return jobId.split(':').length === BULLMQ_JOBID_MIN_SEGMENTS;
-}
+/** 该 jobId 是否会被 BullMQ 接受。实现见 `@signal/contracts`，全仓唯一。 */
+export { isBullMqAcceptableJobId };
 
 /**
  * 启动期自检：**在真正入队之前**把两类静默错误打出来。

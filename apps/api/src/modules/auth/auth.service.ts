@@ -29,7 +29,12 @@ import { constantTimeEqual, generateOAuthState, verifyOAuthState } from './oauth
 import { OtpService } from './otp.service';
 import { RateLimitService } from './rate-limit.service';
 import { AUTH_REPOSITORY, type AuthAccountRecord, type AuthRepository } from './repository';
-import { SessionService, hashFingerprint, type SessionRequestMeta } from './session.service';
+import {
+  SessionService,
+  hashFingerprint,
+  type IssuedSession,
+  type SessionRequestMeta,
+} from './session.service';
 import type { AuthSessionResponse, RequestCodeResponse } from './dto/auth.dto';
 
 /** OAuth provider 名（写入 `auth_accounts.provider`）。 */
@@ -119,13 +124,7 @@ export class AuthService {
 
     this.logger.info({ userId: user.id, flow: 'email-otp' }, 'auth: login succeeded');
 
-    return {
-      response: {
-        user: toMeDto(user),
-        accessTokenExpiresInSeconds: session.accessTokenExpiresInSeconds,
-      },
-      cookies: buildSessionCookies(session, this.config),
-    };
+    return this.loginResult(user, session);
   }
 
   /* ---------------------------------------------------------------- */
@@ -232,6 +231,23 @@ export class AuthService {
     return user;
   }
 
+  /**
+   * 登录成功后的响应形状。
+   *
+   * 「验证码登录」与「刷新会话」返回的是**同一个东西**（`MeDto` + 会话有效期
+   * + Cookie），两处各写一遍迟早会漂移 —— 而漂移的后果是其中一个流程
+   * 少了 Cookie 或漏了字段，只有真的走那条路径才会发现。
+   */
+  private loginResult(user: UserRecord, session: IssuedSession): LoginResult {
+    return {
+      response: {
+        user: toMeDto(user),
+        accessTokenExpiresInSeconds: session.accessTokenExpiresInSeconds,
+      },
+      cookies: buildSessionCookies(session, this.config),
+    };
+  }
+
   /* ---------------------------------------------------------------- */
   /* Session                                                           */
   /* ---------------------------------------------------------------- */
@@ -275,13 +291,7 @@ export class AuthService {
     const user = await this.users.findById(session.userId);
     if (user === null) throw accountLookupBroken();
 
-    return {
-      response: {
-        user: toMeDto(user),
-        accessTokenExpiresInSeconds: session.accessTokenExpiresInSeconds,
-      },
-      cookies: buildSessionCookies(session, this.config),
-    };
+    return this.loginResult(user, session);
   }
 
   /**
