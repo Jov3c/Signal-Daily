@@ -282,6 +282,12 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     // Agent 07：审核队列 / Evidence / Dashboard（docs/04 的 Admin Review 与
     // Admin Event / Evidence 两节 + docs/09 的 Dashboard）。
     'modules/admin-review/controller.ts',
+    // Agent 12：后台运维视图（Jobs / Notifications / AI Usage）。
+    // ⚠ 这三组路由**不在 `docs/04` 里** —— 用户于 2026-09-30 明确授权补上
+    // （`docs/04` 与已实现的代码都只覆盖 Agent 12 九个页面里的六个，
+    //  而另外三页的数据在 `job_runs` / `ai_runs` / `admin_notifications`
+    //  里真实存在、只是没有出口）。见 `CONTRACT_CHANGE_REQUEST-agent-12.md` 第 1 项。
+    'modules/admin-ops/controller.ts',
     // Agent 08：精选与日报的发布/编排（docs/04 的 Admin Publishing 段）。
     // ⚠ `docs/04` 只写了「沿用 v1.0 的 Featured / Daily API」，而 v1.0 不在
     // 本开发包里，因此具体路径是 Agent 08 定义并提了 CCR 的
