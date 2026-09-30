@@ -22,7 +22,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { SourceType as PrismaSourceType } from '@prisma/client';
 import { SOURCE_TYPES, type SourceType } from '@signal/contracts';
 import { DUE_SOURCES_ORDER_BY, buildDueSourcesWhere } from '@signal/source-core';
-import { toContractEnum } from './contract-enum';
+import { toContractEnum } from '../../common/contract-enum';
 import { toBindableId } from './bigint-id';
 import type { CollectorSource, CollectorSourceRepository, FetchOutcome } from './ports';
 import { PrismaService } from './prisma.service';

@@ -21,7 +21,7 @@ import type {
 import type { AiSpendSummary } from './budget';
 import type { EvidenceProjection, SourceIdentity } from './evidence-context';
 import { toContractEvidenceType, toPrismaAiRunStatus, toPrismaAiTaskType } from './contract-enum';
-import { toContractEnum } from './enum-guard';
+import { toContractEnum } from '../../common/contract-enum';
 
 /** 只取本模块需要的列，避免把 LongText 正文在不需要时也拉出来。 */
 const CONTENT_SELECT = {

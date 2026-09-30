@@ -96,21 +96,9 @@ export function toContractRawItemStatus(value: PrismaRawItemStatus): RawItemStat
   throw new Error(`Unexpected RawItemStatus value from database: ${String(value)}`);
 }
 
-/**
- * 白名单收敛（通用版）—— 与 Agent 02 的 `common/prisma/prisma-enums.ts`
- * 里的同名函数是同一件事的又一份实现（已记入 CCR）。
- *
- * 用于读库时把「契约里没有的值」挡在边界外，而不是让它带着一个
- * 非法的 tier/kind 一路走进主来源排序 —— 那会静默给出一个错误的优先级。
- */
-export function toContractEnum<T extends string>(
-  allowed: readonly T[],
-  value: string,
-  label: string,
-): T {
-  if ((allowed as readonly string[]).includes(value)) return value as T;
-  throw new Error(`Unexpected ${label} value from database: ${value}`);
-}
+/* 读取方向：Prisma → 契约（通用白名单收敛，唯一实现见 common） */
+
+export { toContractEnum } from '../../common/contract-enum';
 
 /**
  * Prisma `EvidenceType` → 契约 `EvidenceType`。
