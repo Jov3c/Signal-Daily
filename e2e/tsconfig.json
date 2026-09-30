@@ -1,0 +1,22 @@
+{
+  "$comment": "e2e/ 与 playwright.config.ts 的类型检查。为什么不写在这里就会漏：根 tsconfig.json 是一个 solution 文件（`files: []` + `references`），它只指向 packages/* 与 apps/*；`e2e/**` 和根目录的 `playwright.config.ts` 不在任何 project 的 include 里，`tsc -b` 与 `pnpm -r typecheck` 都不会看它们一眼。这与 apps/api/test/tsconfig.json 记的是同一个坑（那里实测曾藏着 3 个真实类型错误而所有人都看不到）。刻意不 extends 根配置：与 apps/api/test 同理，保持两份独立解析。lib 里必须有 DOM —— page.evaluate() 的回调体是在 Node 侧做类型检查的，而它写的是浏览器里的 window。",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"]
+}

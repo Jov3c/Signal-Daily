@@ -529,7 +529,31 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
 - 详见 [CI-GATE-AND-LEAK-FIX-2026-10-01.md](./CI-GATE-AND-LEAK-FIX-2026-10-01.md)
 
 > ⚠ **集成测试尚未进门禁**（只跑了单元层）—— 原因与配方见该文档 §5.1。
-> **真浏览器层（Playwright）尚未开始**。
+
+---
+
+### 真浏览器 E2E（登录链路）— 2026-10-01
+
+`pnpm test:e2e` → **2 passed / 5.5s / exit 0**
+
+- **一条用例守住三类缺陷**（A 代理不通 / B 封套没解 / C 服务端组件不重渲染）——
+  三者互为上下游，所以一条就够；拆开反而会让上游一坏就收三条红
+- ⚠ **C 类只能用 `/bookmarks` 测**（唯一依赖 Cookie 的**服务端**前台页面）。
+  `/settings` 的账户区是客户端组件，登录后本来就会重渲染，**测不出 C 类**
+- ⚠ **「不许 reload」做成了可执行的守卫**：登录前在 `window` 放哨兵，
+  软刷新保留、`page.reload()` 会换掉整个 JS 环境 —— **用例自己拒绝 reload**。
+  光靠「我们没写 reload」守不住：将来有人为了稳，顺手加一句，用例就恒绿了
+- **牙齿验证我自己复现过**：注释掉 `router.refresh()` → 用例如实变红；
+  恢复后复绿，`apps/web` 零残留
+- ⚠ **顺手补上一个真缺口**：`e2e/` 此前**不参与任何类型检查**
+  （根 tsconfig 是 solution 文件）。补上 `e2e/tsconfig.json` 后**第一次检查就抓到
+  一个真实错误**。已接进 `pnpm typecheck`，CI 门禁自动覆盖
+- 详见 [E2E-LOGIN-2026-10-01.md](./E2E-LOGIN-2026-10-01.md)
+
+> ⚠ E2E **尚未进门禁**（需要 MySQL + Redis + 两份构建产物），原因同 §5.1。
+> ⚠ 装 `@playwright/test` 会**重新链接 `apps/web/node_modules/next`**
+> （`.npmrc` 的 `auto-install-peers` + next 的 optional peer）——
+> 已实测 `--frozen-lockfile` 通过，但下次 `next` 忽然找不到时回来读该文档 §5.7。
 
 ---
 

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b && pnpm --filter @signal/web run typecheck",
+    "typecheck": "tsc -b && pnpm --filter @signal/web run typecheck && tsc --noEmit -p e2e/tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -19,6 +19,7 @@
     "test:ci": "vitest run --maxWorkers=4",
     "test:watch": "vitest",
     "test:db": "vitest run --config vitest.db.config.mts",
+    "test:e2e": "playwright test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:reset": "prisma migrate reset --force",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "^22.20.4",
     "eslint": "^10.11.0",
     "globals": "^17.12.0",

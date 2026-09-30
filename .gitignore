@@ -13,6 +13,13 @@ out/
 coverage/
 .vitest/
 
+# playwright e2e：产物、报告、子进程日志（含开发形态的验证码明文）全在这一个目录下
+e2e/.artifacts/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
 # env / secrets
 .env
 .env.*
