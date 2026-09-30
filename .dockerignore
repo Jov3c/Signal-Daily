@@ -1,0 +1,24 @@
+# 镜像不含 secret、也不含本地产物
+#
+# .env 必须在最前面 —— 它是唯一「复制进去就等于泄漏」的文件。
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+
+.git
+.gitignore
+.github
+
+**/dist
+**/.next
+**/*.tsbuildinfo
+coverage
+*.log
+
+# 本项目的工作约定：临时文件放 work/
+work
+
+infra/nginx/certs

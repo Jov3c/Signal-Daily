@@ -1,0 +1,221 @@
+# Signal 生产编排（香港 VPS 单机）—— `docs/16-deployment-backup.md`
+#
+# ```text
+# nginx → web / api        （同域：/ → web、/api/ → api）
+# api   → mysql, redis
+# worker→ mysql, redis
+# mysql / redis：**只在 internal 网络里**，不映射任何宿主端口
+# ```
+#
+# ── 起：
+#   cp .env.example .env   # 填好 secret（**不要提交**）
+#   docker compose up -d --build
+#   docker compose ps      # 全部 (healthy) 才算起来
+#
+# ── ⚠ 四条硬约束（改动前请先读 `scripts/ops/verify-deploy.mjs`）────────
+#
+# 1. **MySQL / Redis 绝不映射宿主端口** —— `docs/16`：「MySQL 不暴露公网」
+#    「Redis 不暴露公网」。它们的端口只出现在 `internal` 网络上。
+# 2. **nginx 是唯一对外的入口**（80/443）。api 与 web 也不映射端口。
+# 3. **每个服务都要有 healthcheck** —— `docs/16` 的 compose 段要求
+#    `container health` 可验，而「depends_on + healthy」是启动顺序的唯一依据。
+# 4. **日志必须轮转**：`json-file` 的 `max-size` / `max-file`
+#    （`docs/15`：Docker log rotate）。不设的话宿主机磁盘会被写满。
+
+name: signal
+
+# ── 网络 ───────────────────────────────────────────────────────────────
+networks:
+  # 对外：只有 nginx 在这里。
+  edge:
+    driver: bridge
+  # 内部：mysql / redis **只**在这里。`internal: true` 让这个网络
+  # **没有任何出站路由** —— 即使容器被攻破也连不出去。
+  internal:
+    driver: bridge
+    internal: true
+
+# ── 日志轮转（docs/15）────────────────────────────────────────────────
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '20m'
+    max-file: '5'
+
+# ── 通用：从 .env 读，缺一个就起不来（避免「配置漏了但服务照跑」）──────
+x-env-file: &env-file
+  - .env
+
+services:
+  # ── MySQL ────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    # ⚠ **没有 `ports:`** —— 见文件头第 1 条
+    networks: [internal]
+    command:
+      - --default-authentication-plugin=caching_sha2_password
+      # binlog：`docs/16` 的 RPO <= 15min 靠它（全量 dump 每天一次，
+      # 两次 dump 之间用 binlog 补齐）
+      - --log-bin=/var/lib/mysql/mysql-bin
+      - --binlog-expire-logs-seconds=604800
+      - --binlog-format=ROW
+      - --server-id=1
+    env_file: *env-file
+    environment:
+      MYSQL_DATABASE: signal
+      MYSQL_USER: signal
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD 必填}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD 必填}
+      # 备份容器能读 binlog（`scripts/ops/backup-mysql.sh` 走 mysql 客户端）
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # `docs/15` / `docs/16` 要求的字符集与 FULLTEXT：见文件头说明
+      - ./infra/mysql/my.cnf:/etc/mysql/conf.d/signal.cnf:ro
+    healthcheck:
+      # ⚠ 用 `mysqladmin ping` 而不是 `-e 'SELECT 1'`：前者在「server 还在
+      # 初始化」阶段就会失败，这正是我们要的（healthy 之后才允许别人启动）。
+      test:
+        ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    logging: *default-logging
+
+  # ── Redis ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # ⚠ **没有 `ports:`** —— 见文件头第 1 条
+    networks: [internal]
+    # `docs/13`：**Redis 不是业务数据库** —— 即使全丢，已发布内容与采集事实
+    # 都能从 MySQL 恢复。所以**刻意关掉持久化**：RDB/AOF 只会让人误以为
+    # Redis 里有需要保住的东西。容量由 `maxmemory` 兜底。
+    command:
+      - redis-server
+      - --save
+      - ''
+      - --appendonly
+      - 'no'
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    logging: *default-logging
+
+  # ── API ──────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      target: api
+    restart: unless-stopped
+    networks: [edge, internal]
+    env_file: *env-file
+    environment:
+      NODE_ENV: production
+      # compose 里的服务名就是 DNS
+      DATABASE_URL: mysql://signal:${MYSQL_PASSWORD:?}@mysql:3306/signal
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      # `docs/15`：`/health/ready` 只依赖 MySQL + Redis（外部 AI/X/GitHub 不影响）
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://127.0.0.1:3001/health/ready\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  # ── Worker ───────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      target: worker
+    restart: unless-stopped
+    # worker **不需要** edge：它不出网给用户（出网只去外部 API）
+    networks: [internal]
+    env_file: *env-file
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://signal:${MYSQL_PASSWORD:?}@mysql:3306/signal
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      # worker 不监听端口 —— 用「进程还活着且没卡死」的近似判据：
+      # 主进程存在即视为存活（`docs/15` 的 live 语义）。
+      test: ['CMD-SHELL', 'test -d /proc/1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+
+  # ── Web ──────────────────────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      target: web
+    restart: unless-stopped
+    networks: [edge]
+    env_file: *env-file
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://127.0.0.1:3000/\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  # ── Nginx（唯一对外入口）────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    networks: [edge]
+    # ⚠ 这是**唯一**映射宿主端口的服务（见文件头第 2 条）。
+    # 80 只用来自动续签与跳转；业务走 443。
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Let's Encrypt 证书（`infra/nginx/README.md` 有申请步骤）
+      - ./infra/nginx/certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+    depends_on:
+      - api
+      - web
+    healthcheck:
+      test: ['CMD-SHELL', 'nginx -t']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *default-logging
+
+volumes:
+  mysql-data:
+  certbot-webroot:
