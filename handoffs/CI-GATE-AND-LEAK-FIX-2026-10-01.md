@@ -257,12 +257,44 @@ build 阶段 COPY . . 带来了 schema，但 node_modules 是从 deps 继承的�
 且没有配镜像加速）。所以机制是确证的，**构建结果由真 CI 来验** ——
 那本来也是更权威的环境（Linux、从零开始）。
 
-### 6.2 阻塞点二：部署 job 的 secrets 看起来没配 —— **未修**
+### 6.1c ✅ **已由真 CI 验证：这个项目历史上第一次构建成功**
 
-`gh secret list` 是空的。就算 build 修好，`deploy` 也会挂在拿不到
-`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY`。
+`496bdf4` 的 run（`36758109607`）：
 
-（这也**部分**是好事：在 secrets 配好之前，修好 tag 也不会真的把东西推上生产。）
+```text
+✓ test           1m20s
+✓ build (api)    2m56s
+✓ build (worker) 3m48s
+✓ build (web)    2m53s
+X deploy         5s   ← 见 §6.2
+```
+
+日志里的推送证据：
+
+```text
+pushing manifest for ghcr.io/jov3c/signal-daily/api:496bdf4…@sha256:482598…  done
+pushing manifest for ghcr.io/jov3c/signal-daily/api:latest@sha256:482598…   done
+```
+
+⚠ 注意这里的 `jov3c/signal-daily` 是**全小写** —— 也就是 §6.1 那个改动的直接结果。
+两个 tag（sha + latest）都按设计推上去了。**13 次失败之后，镜像第一次真的存在了。**
+
+### 6.2 阻塞点二：部署 job 的 secrets 看起来没配 —— **未修（且已被 CI 证实）**
+
+`gh secret list` 是空的。**这个预测在 `496bdf4` 的 run 里被证实了**：
+build 全绿之后，`deploy` 走到第一步就挂了 ——
+
+```text
+X 记录当前镜像 tag（回滚用）        ← 这是 `appleboy/ssh-action`，需要 VPS_HOST / VPS_SSH_KEY
+- 拉取新镜像
+- Migration gate（失败则中止部署）
+- 切换应用
+```
+
+`deploy` 只跑了 **5 秒**，即 SSH 根本没连上。
+后续步骤全部跳过，`部署失败 → 回滚到上一镜像` 也随之失败（没有可回滚的 tag）。
+
+**这反而是好事**：在 secrets 配好、且 §6.3 修好之前，不会有任何东西被推上生产。
 
 ### 6.3 ⚠ 阻塞点三：`docker-compose.yml` 里三个 app **只有 `build:`，没有 `image:`**
 
