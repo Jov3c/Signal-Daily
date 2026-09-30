@@ -20,7 +20,7 @@ import type { ReactElement } from 'react';
 import Link from 'next/link';
 import { AdminDenied, Badge, DataTable, EmptyRow, duration, isoShort, usd } from '../../../components/admin-ui';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch, type Single } from '../../../lib/api';
+import { loadAdminSingle } from '../../../lib/admin-fetch';
 import type { AiUsageView } from '../../../lib/admin-types';
 
 /** 可选的窗口长度（与后端 `AI_USAGE_MAX_DAYS = 30` 对齐）。 */
@@ -33,15 +33,9 @@ export default async function AdminAiUsagePage({
 }): Promise<ReactElement> {
   const { days } = await searchParams;
 
-  let view: AiUsageView;
-  try {
-    view = (await serverFetch<Single<AiUsageView>>('/admin/ai-usage', { query: { days } })).data;
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdminSingle<AiUsageView>('/admin/ai-usage', { days });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const view = result.data;
 
   // 条形图的宽度以窗口内最大值为基准。全为 0 时避免除零。
   const maxCost = Math.max(...view.daily.map((row) => row.estimatedCostUsd), 0.000001);

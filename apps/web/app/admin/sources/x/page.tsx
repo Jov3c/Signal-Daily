@@ -20,14 +20,10 @@ import Link from 'next/link';
 import { AdminDenied, Badge, DataTable, EmptyRow, isoShort } from '../../../../components/admin-ui';
 import { NewSourceForm, SourceRowActions } from '../../../../components/admin-source-actions';
 import { PageHead } from '../../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../../lib/api';
+import type { OffsetPage } from '../../../../lib/api';
+import { loadAdmin } from '../../../../lib/admin-fetch';
 import type { SourceDto } from '../../../../lib/admin-types';
 import { SourceType } from '@signal/contracts';
-
-type ListResponse = {
-  data: SourceDto[];
-  meta: { page: number; pageSize: number; total: number; totalPages: number };
-};
 
 /** 从 `config` 里读 X 专有的开关（形状由 Agent 03 的 config schema 定义）。 */
 function xConfigOf(source: SourceDto): { handle: string; quotes: boolean; replies: boolean } {
@@ -46,17 +42,12 @@ export default async function AdminXWhitelistPage({
 }): Promise<ReactElement> {
   const { page } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/sources', {
-      query: { page, type: SourceType.X_USER },
-    });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<OffsetPage<SourceDto>>('/admin/sources', {
+    page,
+    type: SourceType.X_USER,
+  });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   const enabledCount = list.data.filter((source) => source.enabled).length;
 

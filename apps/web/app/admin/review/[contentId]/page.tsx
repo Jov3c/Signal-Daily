@@ -31,7 +31,7 @@ import { notFound } from 'next/navigation';
 import { AdminDenied, Badge, isoShort } from '../../../../components/admin-ui';
 import { DecisionPanel, EvidenceEditor } from '../../../../components/admin-review-detail';
 import { PageHead } from '../../../../components/shell';
-import { ApiRequestError, serverFetch, type Single } from '../../../../lib/api';
+import { loadAdminSingle } from '../../../../lib/admin-fetch';
 import type { ReviewDetail } from '../../../../lib/admin-types';
 import { IconExternal } from '../../../../components/icons';
 
@@ -52,17 +52,16 @@ export default async function AdminReviewDetailPage({
 }): Promise<ReactElement> {
   const { contentId } = await params;
 
-  let detail: ReviewDetail;
-  try {
-    detail = (await serverFetch<Single<ReviewDetail>>(`/admin/review/${encodeURIComponent(contentId)}`))
-      .data;
-  } catch (error) {
-    if (error instanceof ApiRequestError) {
-      if (error.status === 401 || error.status === 403) return <AdminDenied status={error.status} />;
-      if (error.status === 404) notFound();
-    }
-    throw error;
+  const result = await loadAdminSingle<ReviewDetail>(
+    `/admin/review/${encodeURIComponent(contentId)}`,
+    undefined,
+    [401, 403, 404],
+  );
+  if (!result.ok) {
+    if (result.status === 404) notFound();
+    return <AdminDenied status={result.status} />;
   }
+  const detail = result.data;
 
   const { content, source, aiScore, event } = detail;
   const evidences = [

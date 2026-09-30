@@ -117,6 +117,54 @@ export function AdminDenied({ status }: { status: number }): ReactElement {
   );
 }
 
+/** 筛选标签。`active` 的那个带上 `active` 类，样式与其余标签一致。 */
+export function TabLink({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <Link className={active ? 'tab active' : 'tab'} href={href}>
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * 上一页 / 下一页。
+ *
+ * `hrefOf` 由各页给出 —— 每页的查询参数不同，而**翻页必须把筛选条件带上**：
+ * 丢掉 `status` 就等于悄悄换了一个结果集，而这个错误在页面上看不出来。
+ */
+export function Pager({
+  page,
+  totalPages,
+  hrefOf,
+}: {
+  page: number;
+  totalPages: number;
+  hrefOf: (page: number) => string;
+}): ReactElement {
+  return (
+    <div className="end-actions" style={{ marginTop: '18px', gap: '8px' }}>
+      {page <= 1 ? null : (
+        <Link className="soft-btn" href={hrefOf(page - 1)}>
+          上一页
+        </Link>
+      )}
+      {page >= totalPages ? null : (
+        <Link className="soft-btn" href={hrefOf(page + 1)}>
+          下一页
+        </Link>
+      )}
+    </div>
+  );
+}
+
 /** 时间：`2026-09-30 11:02`（上海时区）。 */
 export function isoShort(iso: string | null): string {
   if (iso === null) return '—';

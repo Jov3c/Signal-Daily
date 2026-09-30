@@ -23,13 +23,9 @@ import Link from 'next/link';
 import { AdminDenied, Badge, DataTable, EmptyRow, isoShort } from '../../../components/admin-ui';
 import { MarkReadButton } from '../../../components/admin-notification-actions';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../lib/api';
+import type { OffsetPage } from '../../../lib/api';
+import { loadAdmin } from '../../../lib/admin-fetch';
 import type { AdminNotification } from '../../../lib/admin-types';
-
-type ListResponse = {
-  data: AdminNotification[];
-  meta: { page: number; pageSize: number; total: number; totalPages: number };
-};
 
 /** 通知类型的可读名（后端用 `admin_notifications.type` 存字符串）。 */
 const TYPE_LABELS: Record<string, string> = {
@@ -44,15 +40,12 @@ export default async function AdminNotificationsPage({
 }): Promise<ReactElement> {
   const { page, status } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/notifications', { query: { page, status } });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<OffsetPage<AdminNotification>>('/admin/notifications', {
+    page,
+    status,
+  });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   const unread = list.data.filter((row) => row.status === 'UNREAD').length;
 

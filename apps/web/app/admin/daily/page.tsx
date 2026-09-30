@@ -27,11 +27,11 @@ import Link from 'next/link';
 import { AdminDenied, Badge, DataTable, EmptyRow, isoShort } from '../../../components/admin-ui';
 import { EditionActions } from '../../../components/admin-daily-actions';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../lib/api';
+import { loadAdmin } from '../../../lib/admin-fetch';
 import type { AdminEditionRow } from '../../../lib/admin-types';
 import { DailyEditionStatus } from '@signal/contracts';
 
-type ListResponse = {
+type DailyListResponse = {
   data: AdminEditionRow[];
   meta: { from: string; to: string; total: number };
 };
@@ -43,15 +43,9 @@ export default async function AdminDailyPage({
 }): Promise<ReactElement> {
   const { year, month, status } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/daily', { query: { year, month, status } });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<DailyListResponse>('/admin/daily', { year, month, status });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   return (
     <div className="container">

@@ -19,20 +19,14 @@ import type { ReactElement } from 'react';
 import Link from 'next/link';
 import { AdminDenied, Badge, StatCard, isoShort, usd } from '../../components/admin-ui';
 import { EmptyState, PageHead } from '../../components/shell';
-import { ApiRequestError, serverFetch, type Single } from '../../lib/api';
+import { loadAdminSingle } from '../../lib/admin-fetch';
 import type { DashboardStats } from '../../lib/admin-types';
 import { DailyEditionStatus } from '@signal/contracts';
 
 export default async function AdminDashboardPage(): Promise<ReactElement> {
-  let stats: DashboardStats;
-  try {
-    stats = (await serverFetch<Single<DashboardStats>>('/admin/dashboard')).data;
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdminSingle<DashboardStats>('/admin/dashboard');
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const stats = result.data;
 
   return (
     <div className="container">

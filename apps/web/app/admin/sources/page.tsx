@@ -18,14 +18,10 @@ import Link from 'next/link';
 import { AdminDenied, Badge, DataTable, EmptyRow, isoShort } from '../../../components/admin-ui';
 import { NewSourceForm, SourceRowActions } from '../../../components/admin-source-actions';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../lib/api';
+import type { OffsetPage } from '../../../lib/api';
+import { loadAdmin } from '../../../lib/admin-fetch';
 import type { SourceDto } from '../../../lib/admin-types';
 import { SourceTier, SourceType } from '@signal/contracts';
-
-type ListResponse = {
-  data: SourceDto[];
-  meta: { page: number; pageSize: number; total: number; totalPages: number };
-};
 
 export default async function AdminSourcesPage({
   searchParams,
@@ -34,15 +30,9 @@ export default async function AdminSourcesPage({
 }): Promise<ReactElement> {
   const { page, type } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/sources', { query: { page, type } });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<OffsetPage<SourceDto>>('/admin/sources', { page, type });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   return (
     <div className="container">

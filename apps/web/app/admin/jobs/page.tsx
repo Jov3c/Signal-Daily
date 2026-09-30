@@ -14,17 +14,21 @@
  */
 
 import type { ReactElement } from 'react';
-import Link from 'next/link';
-import { AdminDenied, Badge, DataTable, EmptyRow, duration, isoShort } from '../../../components/admin-ui';
+import {
+  AdminDenied,
+  Badge,
+  DataTable,
+  EmptyRow,
+  Pager,
+  TabLink,
+  duration,
+  isoShort,
+} from '../../../components/admin-ui';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../lib/api';
+import type { OffsetPage } from '../../../lib/api';
+import { loadAdmin } from '../../../lib/admin-fetch';
 import type { AdminJobRun } from '../../../lib/admin-types';
 import { JobRunStatus, JOB_RUN_STATUSES } from '@signal/contracts';
-
-type ListResponse = {
-  data: AdminJobRun[];
-  meta: { page: number; pageSize: number; total: number; totalPages: number };
-};
 
 /** 失败与 DEAD 要显眼：它们是「需要人看一眼」的状态。 */
 function toneOf(status: JobRunStatus): 'warn' | undefined {
@@ -38,15 +42,13 @@ export default async function AdminJobsPage({
 }): Promise<ReactElement> {
   const { page, jobType, status } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/jobs', { query: { page, jobType, status } });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<OffsetPage<AdminJobRun>>('/admin/jobs', {
+    page,
+    jobType,
+    status,
+  });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   return (
     <div className="container">
@@ -58,17 +60,13 @@ export default async function AdminJobsPage({
       />
 
       <div className="admin-toolbar">
-        <Link className={status === undefined ? 'tab active' : 'tab'} href="/admin/jobs">
+        <TabLink href="/admin/jobs" active={status === undefined}>
           全部
-        </Link>
+        </TabLink>
         {JOB_RUN_STATUSES.map((value) => (
-          <Link
-            key={value}
-            className={status === value ? 'tab active' : 'tab'}
-            href={`/admin/jobs?status=${value}`}
-          >
+          <TabLink key={value} href={`/admin/jobs?status=${value}`} active={status === value}>
             {value}
-          </Link>
+          </TabLink>
         ))}
         <span className="spacer" />
         <span className="subtle">
@@ -102,18 +100,11 @@ export default async function AdminJobsPage({
         )}
       </DataTable>
 
-      <div className="end-actions" style={{ marginTop: '18px', gap: '8px' }}>
-        {list.meta.page <= 1 ? null : (
-          <Link className="soft-btn" href={hrefOf(list.meta.page - 1, jobType, status)}>
-            上一页
-          </Link>
-        )}
-        {list.meta.page >= list.meta.totalPages ? null : (
-          <Link className="soft-btn" href={hrefOf(list.meta.page + 1, jobType, status)}>
-            下一页
-          </Link>
-        )}
-      </div>
+      <Pager
+        page={list.meta.page}
+        totalPages={list.meta.totalPages}
+        hrefOf={(target) => hrefOf(target, jobType, status)}
+      />
 
       <p className="subtle" style={{ marginTop: '14px' }}>
         「耗时」是由 `finishedAt - startedAt` **派生**的：还在跑的作业显示 `—`

@@ -17,18 +17,13 @@
  */
 
 import type { ReactElement } from 'react';
-import Link from 'next/link';
-import { AdminDenied } from '../../../components/admin-ui';
+import { AdminDenied, Pager, TabLink } from '../../../components/admin-ui';
 import { ReviewQueue } from '../../../components/admin-review-queue';
 import { PageHead } from '../../../components/shell';
-import { ApiRequestError, serverFetch } from '../../../lib/api';
+import type { OffsetPage } from '../../../lib/api';
+import { loadAdmin } from '../../../lib/admin-fetch';
 import type { ReviewListRow } from '../../../lib/admin-types';
 import { EditorialReviewStatus } from '@signal/contracts';
-
-type ListResponse = {
-  data: ReviewListRow[];
-  meta: { page: number; pageSize: number; total: number; totalPages: number };
-};
 
 export default async function AdminReviewQueuePage({
   searchParams,
@@ -37,17 +32,13 @@ export default async function AdminReviewQueuePage({
 }): Promise<ReactElement> {
   const { page, status, minScore } = await searchParams;
 
-  let list: ListResponse;
-  try {
-    list = await serverFetch<ListResponse>('/admin/review', {
-      query: { page, status, minScore },
-    });
-  } catch (error) {
-    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 403)) {
-      return <AdminDenied status={error.status} />;
-    }
-    throw error;
-  }
+  const result = await loadAdmin<OffsetPage<ReviewListRow>>('/admin/review', {
+    page,
+    status,
+    minScore,
+  });
+  if (!result.ok) return <AdminDenied status={result.status} />;
+  const list = result.data;
 
   const { meta } = list;
 
@@ -60,30 +51,24 @@ export default async function AdminReviewQueuePage({
       />
 
       <div className="admin-toolbar">
-        <Link
-          className={status === undefined ? 'tab active' : 'tab'}
-          href="/admin/review"
-        >
+        <TabLink href="/admin/review" active={status === undefined}>
           全部
-        </Link>
-        <Link
-          className={status === EditorialReviewStatus.PENDING ? 'tab active' : 'tab'}
+        </TabLink>
+        <TabLink
           href={`/admin/review?status=${EditorialReviewStatus.PENDING}`}
+          active={status === EditorialReviewStatus.PENDING}
         >
           待审
-        </Link>
-        <Link
-          className={status === EditorialReviewStatus.DEFERRED ? 'tab active' : 'tab'}
+        </TabLink>
+        <TabLink
           href={`/admin/review?status=${EditorialReviewStatus.DEFERRED}`}
+          active={status === EditorialReviewStatus.DEFERRED}
         >
           已搁置
-        </Link>
-        <Link
-          className={minScore === undefined ? 'tab' : 'tab active'}
-          href="/admin/review?minScore=85"
-        >
+        </TabLink>
+        <TabLink href="/admin/review?minScore=85" active={minScore !== undefined}>
           只要高分
-        </Link>
+        </TabLink>
         <span className="spacer" />
         <span className="subtle">
           第 {meta.page} / {meta.totalPages} 页
@@ -96,18 +81,11 @@ export default async function AdminReviewQueuePage({
        *（第一版就是这样，点了没反应且没有任何测试会红）。
        */}
       <ReviewQueue rows={list.data} />
-      <div className="end-actions" style={{ marginTop: '18px', gap: '8px' }}>
-        {meta.page <= 1 ? null : (
-          <Link className="soft-btn" href={pageHref(meta.page - 1, status, minScore)}>
-            上一页
-          </Link>
-        )}
-        {meta.page >= meta.totalPages ? null : (
-          <Link className="soft-btn" href={pageHref(meta.page + 1, status, minScore)}>
-            下一页
-          </Link>
-        )}
-      </div>
+      <Pager
+        page={meta.page}
+        totalPages={meta.totalPages}
+        hrefOf={(target) => pageHref(target, status, minScore)}
+      />
     </div>
   );
 }
