@@ -13,6 +13,13 @@
 
 ## 0. ⚠️ 最高优先：`JobId` 里有 **3 个 builder 的产物会被 BullMQ 直接拒绝**
 
+> ✅ **已解决**（2026-09-30，`1f16b2a`）：用户要求「统一 JobId 契约」后，
+> 契约的六个 builder 全部改为 3 段，`normalize` 与 `dailyDraft` 不再是 2 段；
+> 补齐了缺失的 `aiTranslate` / `dailyPublish`；新增执行期不变式
+> `assertAllJobIdBuildersAreAcceptable()`；三个 worker 模块从「自造」改为**委托**。
+> 这个洞被四个 Agent 各绕过一遍（06 提 → 05 重申 → 08 自造并补真 Redis 证据 → 10 再记录），
+> 四份重复实现就是「没在源头修」的成本。
+
 > 这一项不是「我缺个 builder」，而是**契约里现成的 builder 有 3/4 不可用**。
 > 它影响的不只是我 —— Agent 04 与 Agent 08 一旦照契约使用就会在入队时抛错。
 > 单独放在第 0 位是因为它比本文其它各项都要紧。
@@ -41,12 +48,12 @@ REJECTED  （修复前）translateJobId        translate:123              ← 2 
 
 `packages/contracts/src/queues.ts` 的 `JobId` 共 4 个 builder，**3 个是 2 段**：
 
-| builder | 产物 | 段数 | BullMQ |
-| ------- | ---- | ---- | ------ |
-| `collectorFetchSource` | `collector:{sourceId}:{window}` | 3 | ✅ |
-| `normalize` | `normalize:{rawItemId}` | 2 | ❌ |
-| `aiScore` | `ai-score:{contentId}:{promptVersion}` | 3 | ✅ |
-| `dailyDraft` | `daily-draft:{businessDate}` | 2 | ❌ |
+| builder                | 产物                                   | 段数 | BullMQ |
+| ---------------------- | -------------------------------------- | ---- | ------ |
+| `collectorFetchSource` | `collector:{sourceId}:{window}`        | 3    | ✅     |
+| `normalize`            | `normalize:{rawItemId}`                | 2    | ❌     |
+| `aiScore`              | `ai-score:{contentId}:{promptVersion}` | 3    | ✅     |
+| `dailyDraft`           | `daily-draft:{businessDate}`           | 2    | ❌     |
 
 ### 影响面（不是我一个人的事）
 
@@ -169,13 +176,13 @@ apps/api/src/common/prisma/prisma.service.ts @Global PrismaService
 
 截至目前（含 Agent 04 未提交的工作）worker 侧已经有三份重复：
 
-| 用途                    | 位置                                                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| PrismaService           | `apps/worker/src/jobs/collectors/prisma.service.ts`（Agent 04）、`apps/worker/src/jobs/ai/prisma.service.ts`（Agent 06） |
-| 枚举桥接（契约→Prisma） | `jobs/collectors/contract-enum.ts`（Agent 04）、`jobs/ai/contract-enum.ts`（Agent 06）                                   |
-| 枚举收敛（Prisma→契约） | `jobs/ai/enum-guard.ts`（Agent 06，与 api 的 `prisma-enums.ts` 同一函数）                                                |
-| Redis 连接串解析 | `apps/api/src/modules/sources/source-enqueuer.ts` 的 `redisConnectionOptions()`（Agent 03）、`jobs/ai/connection.ts` 的 `parseRedisConnection()`（Agent 06） |
-| `JobRun` 落库（docs/13 的 Dead Letter） | `jobs/collectors/`（Agent 04）、`jobs/ai/job-run.repository.ts` + `prisma-job-run.repository.ts`（Agent 06） |
+| 用途                                    | 位置                                                                                                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PrismaService                           | `apps/worker/src/jobs/collectors/prisma.service.ts`（Agent 04）、`apps/worker/src/jobs/ai/prisma.service.ts`（Agent 06）                                     |
+| 枚举桥接（契约→Prisma）                 | `jobs/collectors/contract-enum.ts`（Agent 04）、`jobs/ai/contract-enum.ts`（Agent 06）                                                                       |
+| 枚举收敛（Prisma→契约）                 | `jobs/ai/enum-guard.ts`（Agent 06，与 api 的 `prisma-enums.ts` 同一函数）                                                                                    |
+| Redis 连接串解析                        | `apps/api/src/modules/sources/source-enqueuer.ts` 的 `redisConnectionOptions()`（Agent 03）、`jobs/ai/connection.ts` 的 `parseRedisConnection()`（Agent 06） |
+| `JobRun` 落库（docs/13 的 Dead Letter） | `jobs/collectors/`（Agent 04）、`jobs/ai/job-run.repository.ts` + `prisma-job-run.repository.ts`（Agent 06）                                                 |
 
 ### Requested Change
 
