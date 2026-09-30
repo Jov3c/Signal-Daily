@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-30 · Agent 11
+**最后更新：** 2026-09-30 · Agent 13
 
 ---
 
@@ -24,8 +24,8 @@
 | 2B   | **08** | Featured / Daily                 | 00, 01, 05, 06, 07                        | ✅ 已完成 | `3675787`                                                             | [agent-08-HANDOFF.md](./agent-08-HANDOFF.md) |
 | 3    | **10** | Search / Public API              | 00, 01, 02, 05, 08, 09                    | ✅ 已完成 | `a7c1774`                                                             | [agent-10-HANDOFF.md](./agent-10-HANDOFF.md) |
 | 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ✅ 已完成 | `3f8e819` `4f0b8b2`                                                   | [agent-11-HANDOFF.md](./agent-11-HANDOFF.md) |
-| 3    | **12** | Admin UI                         | 02, 03, 07, 08, 10                        | ⬜ 未开始 | —                                                                     | —                                            |
-| 3    | **13** | Public Web v1.7                  | 02, 08, 09, 10                            | ⬜ 未开始 | —                                                                     | —                                            |
+| 3    | **12** | Admin UI                         | 02, 03, 07, 08, 10                        | ✅ 已完成 | `515dec5` `6fd3851`                                                   | [agent-12-HANDOFF.md](./agent-12-HANDOFF.md) |
+| 3    | **13** | Public Web v1.7                  | 02, 08, 09, 10                            | ✅ 已完成 | `7f9921c` `bcc585c`                                                   | [agent-13-HANDOFF.md](./agent-13-HANDOFF.md) |
 | 4    | **14** | Final Integration                | **全部**                                  | ⬜ 未开始 | —                                                                     | —                                            |
 
 ### 状态取值（只用这五个）
@@ -44,16 +44,15 @@
 
 ## 当前可开工
 
-| Agent  | 说明                                       |
-| ------ | ------------------------------------------ |
-| **12** | 上游 02 / 03 / 07 / 08 / 10 ✅；Admin UI   |
-| **13** | 上游 02 / 08 / 09 / 10 ✅；Public Web v1.7 |
+| Agent  | 说明                                                           |
+| ------ | -------------------------------------------------------------- |
+| **14** | **全部上游已完成**（00–13）。最终集成：根模块挂载 + 端到端走查 |
 
-> 规则 §18：建议同时最多跑 3–4 个 Agent。
-> **Wave 1 / 1B / 2 / 2B / 3 里的 10 / 11 都已交付**（02 / 03 / 04 / 05 / 06 / 07 / 08 / 09 / 10 / 11）。
-> **剩下 12 / 13 可开工**，之后是 **14（最终集成）**。
-> ⚠ 12 / 13 都是前端，**在此之前先看 Agent 11 的要点速查** —— 起真实进程所需的
-> 挂载清单在 `agent-11-HANDOFF.md` 的 Integration Notes 里。
+> **Wave 1 / 1B / 2 / 2B / 3 全部完成**（02–13）。
+> ⚠ **只剩 14**，而它现在是**唯一**的阻塞点：在根 `AppModule` /
+> `worker.module.ts` 挂载完成之前，**没有任何一个页面或接口能被真正跑起来**。
+> Agent 12 / 13 的验证都止步于「SSR / 真 HTTP 正确」——
+> **没有任何一次点击被验证过**（P0 就是在这个盲区里发现的，见「当前阻塞」第 8 条）。
 
 ---
 
@@ -61,7 +60,7 @@
 
 无。
 
-> ⚠ 有**五项**已知项（不阻塞 12 / 13，但 Agent 14 必做）：
+> ⚠ 有**七项**已知项（Agent 14 必做）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
 >    - `AdminReviewModule`（Agent 07），
@@ -94,7 +93,21 @@
 >    ⚠ 各 Agent 要点速查里那些「JobId 仍是 2 段」的提醒**已经过时**。
 > 6. ✅ 已修（2026-09-30，`fbb6756`）：Agent 05 的 content-db 偶发 MySQL 死锁
 >    （外键 S 锁 + 唯一键查重 S 锁的环）；一条**静态顺序守卫**经变异验证有牙齿。
-> 7. ⚠ **Agent 11 发现**：`app.module.ts` 还必须挂 **`HealthModule`**
+> 7. ⚠⚠ **Agent 13 实测发现的 P0（已修，但同类风险仍在）**：
+>    `apps/web/app/page.tsx`（Agent 00 的占位页）与
+>    `apps/web/app/(site)/page.tsx`（真首页）**都解析到 `/`**（路由组不产生路径段），
+>    Next **不报错**、占位页赢了 —— 「今日」从头到尾不可达，
+>    而构建通过、22 条路由都在、`curl /` 返回 200、30 项守卫全绿。
+>    已删占位页（`bcc585c`）+ 两个 layout 加 `force-dynamic`
+>    - 加了一条「路由不许有影子页」的守卫。
+>      **教训：Agent 12 / 13 的全部验证都止步于 SSR 与真 HTTP，
+>      没有一次点击被验证过。** 14 挂完模块后第一件事应当是**真浏览器走查**。
+> 8. ⚠ **Agent 12 发现**：`app.module.ts` 还要挂 **`AdminOpsModule`**
+>    （`apps/api/src/modules/admin-ops`，本次新增的 4 条后台接口）。
+>    另外 **`docs/04` 与 `tasks/agent-12-admin-ui.md` 互相矛盾** ——
+>    后台的 Jobs / Notifications / AI Usage 三页在契约里**从来没有接口**，
+>    用户已授权补上（`CONTRACT_CHANGE_REQUEST-agent-12.md` 第 1、4 项）。
+> 9. ⚠ **Agent 11 发现**：`app.module.ts` 还必须挂 **`HealthModule`**
 >    （`apps/api/src/modules/health`）—— 不挂的话 compose 的 api healthcheck
 >    （打 `http://api:3001/health/ready`）永远 503，**整栈起不来**。
 >    另外 **worker 的 healthcheck 是个空壳**（`test -d /proc/1`，
@@ -414,6 +427,45 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
   而 ACME 的 webroot 又需要 nginx** —— 首次部署必须先用自签证书占位
 - 未新增 env（探针超时是常量 `PROBE_TIMEOUT_MS = 3000`，实测边界）；
   未改 Prisma / 未建 Migration / 未动 `app.module.ts`
+
+### Agent 12 — 管理后台 UI
+
+**⚠ 未做 §23 独立审查**。做了 **4 条变异反证**（全部实测）。
+
+- 后台 **9 页**（`apps/web/app/admin/`）+ **新模块 `admin-ops`** 的 4 条接口
+- ⚠ **根因：任务书要 9 页，`docs/04` 只定义了 6 组接口** ——
+  Jobs / Notifications / AI Usage **在契约里从来没有接口**，
+  而三张表一直有写入方。用户已授权补上（CCR 第 1 项；其中
+  `POST .../read` 是任务书没要求的，请裁决）
+- **⚠ Agent 14 必做**：挂 `AdminOpsModule`；**不要**再手动注册守卫或过滤器
+- **⚠ `/admin/*` 必须与前台同域** —— `AdminOriginGuard` 按 Origin 判变更类请求，
+  跨域的后台会**所有变更 403**。后台放在 `apps/web` 的 `/admin/*` 下正是为此
+- **⚠ 后台没有设计稿**：用户裁决「沿用前台 v1.7 视觉」。
+  `admin.css` 里**每个 `var(--…)` 都在前台 `globals.css` 里定义过**，
+  且不许出现任何 hex 颜色（有守卫）
+- 动作名 ≠ 状态名：动作 `DEFER`/`REJECT`，状态 `DEFERRED`/`REJECTED`。
+  写错会 400 而只在运行时可见 —— 有守卫直接读后端 dto 比对
+- 未建 Migration；未新增 env；未改任何既有 API 的响应形状
+
+### Agent 13 — 前台 v1.7（Next.js）
+
+**⚠ 未做 §23 独立审查**。替代：47 项视觉契约守卫 + 14 项镜像一致性守卫
+
+- **真进程 curl**（后者发现了那个 P0）。
+
+* 13 条路由全部接真 API；**没有 subscription 相关的一切**（`docs/23`）
+* ⚠⚠ **最重要的发现（已修）**：见「当前阻塞」第 8 条
+* ⚠ `globals.css` 是原型 CSS 的**逐字节**副本，**在 `.prettierignore` 里** ——
+  prettier 会把 `#FAF9F5` 小写成 `#faf9f5`，而验收项 20/21 断言的正是那几个字面量
+* **⚠ Agent 14 必备**：`apps/web` 要 `API_BASE_URL`（SSR 时请求 API），
+  未设时回退 `http://127.0.0.1:3001/api`。nginx **不用改**
+* 三处**有意偏离原型**，都在 CCR-agent-13 里请裁决：X 动态的标签
+  （分类字段拿不到 → 改成人物）、主题三档（`docs/11` 有 `SYSTEM`）、
+  收藏标签只筛当前页（`GET /bookmarks` 没有 type 参数）
+* 登录是**抽屉**、只有邮箱验证码（用户裁决）；文案严格跟随服务端的
+  「不透露邮箱是否注册」语义
+* ⚠ 上报未改：`/featured` 把 `pipelineStatus`/`reviewStatus` 漏给公开响应
+  （日报有投影层，精选没有）—— 属 Agent 08 的公开形状
 
 ## 更新方法（Agent 完成后照做）
 
