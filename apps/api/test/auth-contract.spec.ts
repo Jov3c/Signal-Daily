@@ -179,12 +179,33 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     //   原生 SQL 改角色，静态扫描都抓不到。
     //   真正的兜底是「路由面精确等于契约」那条断言（多一个提权端点就红）
     //   以及 AdminGuard 以数据库角色为准。这里只拦住最容易发生的几种写法。
-    const RAW_SQL = /\$(?:executeRaw|queryRaw|executeRawUnsafe|queryRawUnsafe)/;
+    // ⚠ **只读的、参数化的 `$queryRaw` 是允许的**（Agent 10 补）。
+    //
+    // 这条守卫防的是「绕过 ORM **写库**」（上面那条测试的题眼就是
+    // 「原生写库」）以及「把用户输入拼进 SQL」。而 FULLTEXT 的
+    // `MATCH ... AGAINST` **没有 ORM 表达法**（Prisma 的 `@@fulltext`
+    // 无法表达 `WITH PARSER ngram`，见 Agent 01 的第二个迁移），
+    // 公开搜索只能用原生 SQL **读**。
+    //
+    // 所以规则收紧成：**写**与**可拼接的读**一律禁止；只读的 `$queryRaw`
+    // 必须写成 `Prisma.sql` 标签模板（→ 参数化，注入进不来）。
+    const RAW_SQL_FORBIDDEN = [
+      // 原生写（`$executeRaw` 同时覆盖 `$executeRawUnsafe`）
+      /\$executeRaw/,
+      // 任何 `*Unsafe`（可以传拼接好的字符串）
+      /\$queryRawUnsafe/,
+      // `$queryRaw` 但**不是**紧跟 `Prisma.sql` 的标签模板形态
+      /\$queryRaw(?!\s*(?:<[^>]*>)?\s*\(\s*Prisma\.sql)/,
+    ];
     const ADMIN_LITERAL = /['"`]ADMIN['"`]/;
 
     const offenders = sourceFiles()
       .filter((file) => file.relativePath.startsWith('modules/'))
-      .filter((file) => RAW_SQL.test(file.code) || ADMIN_LITERAL.test(file.code))
+      .filter(
+        (file) =>
+          RAW_SQL_FORBIDDEN.some((pattern) => pattern.test(file.code)) ||
+          ADMIN_LITERAL.test(file.code),
+      )
       .map((file) => file.relativePath);
 
     expect(offenders).toEqual([]);

@@ -111,6 +111,7 @@ function declaredTypeAliases(files: SourceFile[]): Set<string> {
       const name = match[1];
       if (name !== undefined) names.add(name);
     }
+
   }
   return names;
 }

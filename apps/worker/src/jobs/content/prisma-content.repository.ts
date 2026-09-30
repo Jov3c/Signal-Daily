@@ -34,14 +34,14 @@ import type { EvidenceCandidate, EvidencePlan, ExistingEvidence } from './eviden
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
-import { EVENT_RELATION, EVENT_STATUS_ACTIVE, type EventRelation, type ExistingEvent } from './cluster/event-cluster';
+import {
+  EVENT_RELATION,
+  EVENT_STATUS_ACTIVE,
+  type EventRelation,
+  type ExistingEvent,
+} from './cluster/event-cluster';
 import { pickPrimaryContent, type PrimaryCandidate } from './cluster/priority';
-import type {
-  ContentRepository,
-  NewContent,
-  PersistOutcome,
-  RawItemWithSource,
-} from './ports';
+import type { ContentRepository, NewContent, PersistOutcome, RawItemWithSource } from './ports';
 import { ContentPrismaService } from './prisma.service';
 
 /** 只取本模块需要的列 —— 不要为了省一次查询把 `body_raw` 也拉出来。 */
@@ -111,8 +111,50 @@ export class PrismaContentRepository implements ContentRepository {
       );
     }
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
+    // ── ⚠ 写这两张表的**顺序是刻意的**（别调换）────────────────────
+    //
+    // 这里是**外键 + 唯一键的经典死锁**，2026-09-30 由用户/审查者发现的
+    // 偶发失败定位到（`content-db.integration.spec.ts` 的并发用例，
+    // 报 `Transaction failed due to a write conflict or a deadlock`）。
+    //
+    // 机制：`contents.raw_item_id` 有 FK 指向 `raw_items.id`，所以
+    // **`INSERT contents` 会对 `raw_items` 的那一行取 S 锁**（外键检查）。
+    // 原来的顺序是「先 INSERT contents、再 UPDATE raw_items」，于是：
+    //
+    // ```text
+    // T1: INSERT contents  → 持 raw_items[R] 的 S 锁
+    // T2: INSERT contents  → FK 检查也取 raw_items[R] 的 S 锁（S 与 S 兼容）
+    //                      → 唯一键查重需要 S 锁 T1 尚未提交的索引记录 → 等 T1
+    // T1: UPDATE raw_items → 需要 raw_items[R] 的 X 锁，但 T2 持着 S → 等 T2
+    // ```
+    //
+    // T1 等 T2、T2 等 T1 → 死锁。InnoDB 会挑一个回滚，于是**偶发**失败
+    //（取决于两个事务的交错时机，单跑 6 次可能一次都不出现）。
+    //
+    // **修法：统一加锁顺序** —— 先 `UPDATE raw_items`（拿 X 锁），
+    // 再 `INSERT contents`。两个事务按同一个顺序取锁，环就不存在了：
+    // T2 会在第一步就阻塞在 raw_items 的 X 锁上，**不会**同时持有
+    // raw_items 的 S 锁去等 contents 的记录。
+    //
+    // 原子性不受影响：两步仍在同一个事务里，第二步失败照样全部回滚
+    //（`content-db.integration.spec.ts` 的「Content 建失败时 RawItem 状态
+    // 不被推进」盯着这一点）。
+    const attempt = async (): Promise<{ contentId: string; alreadyExisted: boolean }> =>
+      this.prisma.$transaction(async (tx) => {
+        // 1) 先推进 RawItem 状态：否则会出现「Content 建好了、
+        //    RawItem 还是 FETCHED」，调度器下一轮又把它捞起来。
+        await tx.rawItem.update({
+          where: { id: rawItemId },
+          data: {
+            status: toPrismaRawItemStatus(RawItemStatus.NORMALIZED),
+            // 归一化成功后清掉上一次的失败码，避免「成功但还挂着旧错误」。
+            failureCode: null,
+          },
+          select: { id: true },
+        });
+
+        // 2) 再建 Content（FK 检查会取 raw_items 的 S 锁 —— 我们已持有 X 锁，
+        //    同事务内重入没有问题）。
         const created = await tx.content.create({
           data: {
             sourceId,
@@ -129,20 +171,11 @@ export class PrismaContentRepository implements ContentRepository {
           select: { id: true },
         });
 
-        // 同一事务里推进 RawItem 状态：否则会出现「Content 建好了、
-        // RawItem 还是 FETCHED」，调度器下一轮又把它捞起来。
-        await tx.rawItem.update({
-          where: { id: rawItemId },
-          data: {
-            status: toPrismaRawItemStatus(RawItemStatus.NORMALIZED),
-            // 归一化成功后清掉上一次的失败码，避免「成功但还挂着旧错误」。
-            failureCode: null,
-          },
-          select: { id: true },
-        });
-
         return { contentId: String(created.id), alreadyExisted: false };
       });
+
+    try {
+      return await attempt();
     } catch (error) {
       // 并发下别人先写入了同一条 RawItem 的 Content（`contents.raw_item_id`
       // 是唯一约束）。这**不是错误** —— 「同一份事实只归一化一次」正是我们要的，
@@ -150,6 +183,23 @@ export class PrismaContentRepository implements ContentRepository {
       if (isRawItemIdConflict(error)) {
         const existing = await this.findContentIdByRawItemId(input.rawItemId);
         if (existing !== null) return { contentId: existing, alreadyExisted: true };
+      }
+
+      // ⚠ **死锁/写冲突（P2034）是可重试的**：统一加锁顺序之后本模块不该
+      // 再自己造出死锁，但 InnoDB 仍可能因为**别的事务**（例如
+      // `content_dedup` / 证据挂接 / 人工操作）持有交集而选中本事务回滚。
+      // Prisma 的官方指引就是「请重试你的 transaction」，所以重试一次。
+      // 重试是安全的：`attempt` 是幂等的（要么建成、要么撞唯一约束）。
+      if (isTransactionConflict(error)) {
+        try {
+          return await attempt();
+        } catch (second) {
+          if (isRawItemIdConflict(second)) {
+            const existing = await this.findContentIdByRawItemId(input.rawItemId);
+            if (existing !== null) return { contentId: existing, alreadyExisted: true };
+          }
+          throw second;
+        }
       }
       throw error;
     }
@@ -684,4 +734,21 @@ function isRawItemIdConflict(error: unknown): boolean {
   const target = error.meta?.['target'];
   const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
   return fields.some((field) => field.includes('raw_item_id') || field.includes('rawItemId'));
+}
+
+/**
+ * 该错误是不是「事务因写冲突 / 死锁被回滚」。
+ *
+ * Prisma 把 InnoDB 的 `ER_LOCK_DEADLOCK`（1213）与
+ * `ER_LOCK_WAIT_TIMEOUT`（1205）都收敛成 **`P2034`**，错误信息是
+ * 「Transaction failed due to a write conflict or a deadlock.
+ * Please retry your transaction」—— **它自己就在说「重试」**。
+ *
+ * ⚠ 与 `isRawItemIdConflict` 的区别很重要：那个是**业务结论**
+ *（「别人已经建好了」→ 返回已有 id，不重试也不必重试）；
+ * 这个是**瞬时故障**（回滚了、什么都没留下 → 重试是安全的）。
+ * 把两者混为一谈会让「死锁」被当成「已存在」而**静默返回一个不存在的 id**。
+ */
+function isTransactionConflict(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
 }
