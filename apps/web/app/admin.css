@@ -1,0 +1,248 @@
+/* =====================================================================
+ * 后台专用样式。
+ *
+ * ⚠ 与 `globals.css` 的分工（那条规矩在 globals.css 的文件头写着）：
+ * **`globals.css` 是原型的移植产物，要保持可 diff**，所以后台需要的新东西
+ * 一律写在这里。
+ *
+ * 后台**没有设计稿**（原型只有用户前台）。用户 2026-09-30 决定：
+ * 「沿用前台 v1.7 的视觉」—— 也就是说这里只允许**复用**已经有的令牌，
+ * 不新造颜色。凡是出现 `var(--…)` 的地方都必须是 globals.css 里定义过的。
+ *
+ * 唯一真正新的是**表格**：前台没有表格（它是阅读产品），而后台的
+ * Review Queue / Sources / Jobs 三页都是「一排一排的数据」。
+ * 表格用同一套 `--border` / `--interactive-hover`，
+ * hover 仍然是「只改背景」，与 `docs/23` 的 hover 契约一致。
+ * ===================================================================== */
+
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.admin-toolbar .spacer {
+  flex: 1;
+}
+
+/* 数据表：与前台共享令牌，因此自动跟随主题。 */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-2);
+  vertical-align: top;
+}
+
+.data-table th {
+  background: var(--bg-subtle);
+  color: var(--text-2);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ⚠ hover 只改背景 —— 与 Card 的契约同一条（docs/23）。不定位移、不加阴影。 */
+.data-table tbody tr:hover td {
+  background: var(--interactive-hover);
+}
+
+.data-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 指标卡（Dashboard / AI 用量顶部那几个数字）。 */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  background: var(--bg-main);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.stat-card:hover {
+  border-color: var(--border-strong);
+  background: var(--interactive-hover);
+}
+
+.stat-card .label {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stat-card .value {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  margin-top: 6px;
+}
+
+.stat-card .hint {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 4px;
+}
+
+/* 状态徽标（UNREAD / FAILED / PUBLISHED…）。 */
+.badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-subtle);
+  white-space: nowrap;
+}
+
+.badge.warn {
+  border-color: var(--text-3);
+  color: var(--text);
+}
+
+/* 极简条形图（AI 用量的按日成本）。用宽度表达数值，不用 canvas：
+   为一张后台的小图引入图表库不划算，而且它的配色会脱离设计令牌。 */
+.bar-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 76px;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.bar-track {
+  height: 10px;
+  background: var(--bg-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--text-3);
+  border-radius: 999px;
+}
+
+.bar-row .bar-value {
+  text-align: right;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Review Detail 的两栏（左：内容，右：证据链）。窄屏叠起来。 */
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.detail-block {
+  border: 1px solid var(--border);
+  background: var(--bg-main);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.detail-block h2 {
+  font-size: 13px;
+  margin: 0 0 12px;
+  letter-spacing: -0.01em;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 6px 12px;
+  font-size: 12px;
+}
+
+.kv dt {
+  color: var(--text-3);
+}
+
+.kv dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* 表单控件：与前台 `.search-box` 同一形状，只是允许更宽。 */
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field > span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-main);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.field textarea {
+  height: auto;
+  min-height: 96px;
+  padding: 8px 10px;
+}
+
+.field input:hover,
+.field select:hover,
+.field textarea:hover {
+  background: var(--interactive-hover);
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
