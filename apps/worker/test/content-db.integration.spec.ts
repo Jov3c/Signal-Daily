@@ -155,9 +155,17 @@ afterEach(async () => {
 afterAll(async () => {
   // 逆着外键顺序清理，只删本测试造的数据。
   // 事件表：本测试建的都挂在被测内容上，按 eventId 清理（EventContent 级联）
-  await prisma.event.deleteMany({ where: { contents: { some: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } } } } });
-  await prisma.content.deleteMany({ where: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } } });
-  await prisma.rawItem.deleteMany({ where: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } } });
+  await prisma.event.deleteMany({
+    where: {
+      contents: { some: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } } },
+    },
+  });
+  await prisma.content.deleteMany({
+    where: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } },
+  });
+  await prisma.rawItem.deleteMany({
+    where: { sourceId: { in: [sourceId, secondSourceId, officialSourceId] } },
+  });
   await prisma.source.deleteMany({ where: { id: { in: [sourceId, secondSourceId] } } });
   await prisma.$disconnect();
 });
@@ -184,9 +192,7 @@ describe('findRawItemWithSource（真库 join + 枚举桥接）', () => {
     // 18446744073709551615 是 BIGINT UNSIGNED 的合法上限，
     // 但 Prisma 按**有符号** 64 位绑定 —— 直接传会抛
     // PrismaClientUnknownRequestError。这里必须是干净的 null。
-    await expect(
-      repository.findRawItemWithSource('18446744073709551615'),
-    ).resolves.toBeNull();
+    await expect(repository.findRawItemWithSource('18446744073709551615')).resolves.toBeNull();
   });
 
   it('畸形 id 返回 null', async () => {
@@ -289,14 +295,93 @@ describe('唯一约束与并发（真库才验得到）', () => {
     // 「同一份事实只归一化一次」正是我们想要的语义。
     const rawItemId = await seedRawItem();
 
-    const [a, b] = await Promise.all([
-      service.normalize(rawItemId),
-      service.normalize(rawItemId),
-    ]);
+    const [a, b] = await Promise.all([service.normalize(rawItemId), service.normalize(rawItemId)]);
 
     expect(a.status).toBe('NORMALIZED');
     expect(b.status).toBe('NORMALIZED');
     expect(await prisma.content.count({ where: { rawItemId: BigInt(rawItemId) } })).toBe(1);
+  });
+
+  /**
+   * ⚠ **外键 + 唯一键的死锁**（2026-09-30 修）—— 加大概率，**不是保证**。
+   *
+   * 上面那条「并发归一化同一条 RawItem」只并发**一次**，所以它只在
+   * 两个事务以特定方式交错时才失败 —— 实测单跑 6 次一次都不出现，
+   * 而跑整套（争用更大）时大约三次撞一次。**罕见的失败不是不失败**，
+   * 而且它在 CI 上的表现是「随机红一条」，最难排查。
+   *
+   * 这条用**多轮**并发把交错概率放大。
+   *
+   * ⚠ **必须说清楚它的牙齿边界**：把实现改回原来的加锁顺序之后，
+   * 这条用例**仍然可能全绿**（实测 20 轮就是绿的）—— 因为两个事务能不能
+   * 撞进那个窗口取决于连接池与 InnoDB 的调度。
+   * 也就是说**它不是一道可靠的回归防线**，可靠的那道是下面那条
+   * 「静态顺序守卫」。留着它的价值是：真出现死锁时它会报，
+   * 而且报错信息（`write conflict or a deadlock`）能直接指向这里。
+   */
+  it('⚠ 反复并发归一化：不出现死锁（加大概率；**不保证**能复现）', async () => {
+    const ROUNDS = 20;
+    const outcomes: string[] = [];
+
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const rawItemId = await seedRawItem();
+      // 每一轮两条并发：一条建成、另一条必然撞唯一约束。
+      const [a, b] = await Promise.all([
+        service.normalize(rawItemId),
+        service.normalize(rawItemId),
+      ]);
+      outcomes.push(`${a.status}/${b.status}`);
+    }
+
+    expect(outcomes).toHaveLength(ROUNDS);
+    expect(outcomes.every((outcome) => outcome === 'NORMALIZED/NORMALIZED')).toBe(true);
+  });
+});
+
+/**
+ * ⚠ **静态顺序守卫：`persistAndChain` 里两张表的写入顺序**。
+ *
+ * ── 为什么需要一条「读源码」的测试 ──────────────────────────────────
+ * 这条守的是一个**只靠跑测试证明不了**的性质（见上一条用例的说明）：
+ * 把顺序改回去，测试很可能仍然全绿，而线上/CI 上会偶发
+ * `Transaction failed due to a write conflict or a deadlock`。
+ *
+ * 机制（写在 `prisma-content.repository.ts` 的 `persistAndChain` 里）：
+ * `contents.raw_item_id` 有 FK，所以 `INSERT contents` 会对 `raw_items`
+ * 那一行取 **S 锁**；两个并发事务若都「先 INSERT contents、再 UPDATE
+ * raw_items」，就会互相持有对方要的锁 → 环 → 死锁。
+ *
+ * 把顺序固定成「先 UPDATE raw_items、再 INSERT contents」之后，
+ * 两个事务按同一顺序取锁，环不存在。
+ *
+ * **静态断言的代价**：它会在重构（比如把两步抽成两个函数）时误报。
+ * 那时候请**先确认顺序仍然正确**，再调这条测试 —— 不要直接删掉它。
+ */
+describe('静态顺序守卫（真实仓库源码）', () => {
+  it('`persistAndChain` 必须先写 raw_items、再写 contents', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = fileURLToPath(
+      new URL('../src/jobs/content/prisma-content.repository.ts', import.meta.url),
+    );
+    const source = readFileSync(path, 'utf8');
+
+    const start = source.indexOf('const attempt = async ()');
+    expect(start, '找不到 `attempt`（`persistAndChain` 的实现被改名了？）').toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf('try {', start));
+
+    const updateAt = body.indexOf('tx.rawItem.update');
+    const createAt = body.indexOf('tx.content.create');
+
+    expect(updateAt, '`attempt` 里应当有 rawItem.update').toBeGreaterThan(-1);
+    expect(createAt, '`attempt` 里应当有 content.create').toBeGreaterThan(-1);
+
+    expect(
+      updateAt,
+      '⚠ 顺序被改回去了：`INSERT contents` 会先对 raw_items 取外键 S 锁，' +
+        '两个并发事务会死锁（见这条守卫上方的说明）。' +
+        '必须「先 UPDATE raw_items、再 INSERT contents」。',
+    ).toBeLessThan(createAt);
   });
 });
 
@@ -517,7 +602,11 @@ describe('Event Cluster（真库：Event / EventContent / contents.event_id）',
     const { a, b } = scene();
     const rawA = await seedRawItem({ titleRaw: '技术报告', bodyRaw: `<p>${a}</p>` });
     const rawB = await seedRawItem(
-      { titleRaw: '技术报告', bodyRaw: `<p>${b}</p>`, externalId: `ext-${randomBytes(6).toString('hex')}` },
+      {
+        titleRaw: '技术报告',
+        bodyRaw: `<p>${b}</p>`,
+        externalId: `ext-${randomBytes(6).toString('hex')}`,
+      },
       secondSourceId,
     );
 
@@ -583,7 +672,6 @@ describe('Event Cluster（真库：Event / EventContent / contents.event_id）',
   });
 });
 
-
 describe('Evidence Attach（真库：五类证据 + Primary 事务唯一）', () => {
   /**
    * 一次「场景」= 两篇**彼此相似**的报道。
@@ -626,7 +714,10 @@ describe('Evidence Attach（真库：五类证据 + Primary 事务唯一）', ()
   });
 
   async function clusterOne(body: string, onSourceId: bigint): Promise<string> {
-    const rawItemId = await seedRawItem({ titleRaw: '技术报告', bodyRaw: `<p>${body}</p>` }, onSourceId);
+    const rawItemId = await seedRawItem(
+      { titleRaw: '技术报告', bodyRaw: `<p>${body}</p>` },
+      onSourceId,
+    );
     const outcome = await service.normalize(rawItemId);
     if (outcome.status !== 'NORMALIZED') throw new Error('unreachable');
     const clustered = await service.clusterContent(outcome.contentId);
@@ -634,9 +725,17 @@ describe('Evidence Attach（真库：五类证据 + Primary 事务唯一）', ()
     return clustered.eventId;
   }
 
-  async function clusterAdditional(body: string, onSourceId: bigint, eventId: string): Promise<void> {
+  async function clusterAdditional(
+    body: string,
+    onSourceId: bigint,
+    eventId: string,
+  ): Promise<void> {
     const rawItemId = await seedRawItem(
-      { titleRaw: '技术报告', bodyRaw: `<p>${body}</p>`, externalId: `ext-${randomBytes(6).toString('hex')}` },
+      {
+        titleRaw: '技术报告',
+        bodyRaw: `<p>${body}</p>`,
+        externalId: `ext-${randomBytes(6).toString('hex')}`,
+      },
       onSourceId,
     );
     const normalized = await service.normalize(rawItemId);
@@ -736,7 +835,6 @@ describe('Evidence Attach（真库：五类证据 + Primary 事务唯一）', ()
   });
 });
 
-
 describe('AI 衔接 + Review Queue（真库）', () => {
   function scene(): string {
     const marker = randomBytes(24).toString('hex');
@@ -816,7 +914,6 @@ describe('AI 衔接 + Review Queue（真库）', () => {
     expect(content.pipelineStatus).toBe('ANALYZING');
   });
 });
-
 
 describe('bigint-id 的边界（真库对照）', () => {
   it('toBindableId 的上界与 Prisma 的实际能力一致', () => {
