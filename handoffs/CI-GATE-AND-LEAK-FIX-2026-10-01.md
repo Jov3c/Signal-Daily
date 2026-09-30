@@ -222,6 +222,41 @@ ERROR: invalid tag "ghcr.io/Jov3c/Signal-Daily/api:…": repository name must be
 修法：加一个 `run` 步骤算小写前缀（GitHub Actions 的表达式里没有 `toLower`），
 `tags:` 改用它的输出。本地验过那行 shell 输出 `ghcr.io/jov3c/signal-daily`。
 
+### 6.1b ⚠ 修好 tag 之后，**露出了被它掩住的第二个缺陷**
+
+这一条很能说明「13 次全挂在同一行」的代价：**一个 bug 把另一个 bug 挡住了 13 次。**
+
+tag 修好后重推，`算出小写的镜像前缀` 那一步 ✓ 通过，但 `docker build` 换了个理由失败：
+
+```text
+prisma/seed.ts: Module '"@prisma/client"' has no exported member 'SourceKind'
+apps/api/…/prisma-admin-ops.repository.ts: … 'AiRunStatus' / 'AiTaskType' / 'JobRunStatus'
+… Namespace '….Prisma' has no exported member 'Decimal'
+```
+
+**根因：`infra/Dockerfile` 从来没有跑过 `prisma generate`。**
+
+```text
+deps 阶段  只 COPY 了各个 package.json（为了层缓存）—— 那时 schema.prisma 还不在镜像里
+           → @prisma/client 装出来的是一份**没有模型/枚举的客户端**
+build 阶段 COPY . . 带来了 schema，但 node_modules 是从 deps 继承的，
+           **而没有任何地方再跑过 generate**
+```
+
+已确证（不是推测）：缺失的那些枚举（`SourceKind` / `AiRunStatus` / …）
+**全部定义在 `prisma/schema.prisma` 里**，只能由 `prisma generate` 产出；
+根 `package.json` **没有 `postinstall`**，所以没人会替我们跑这一步。
+
+**本地为什么一直没发现**：开发机的 `node_modules` 里早就有一份生成好的客户端，
+`pnpm build` 一直是过的 —— **任何干净的机器上都构建不出来**。
+
+修法：在 `build` 阶段 `COPY . .` 之后、`pnpm build` 之前加 `RUN pnpm db:generate`。
+
+⚠ **这条本地没能验证**：本机 **Docker Hub 不可达**
+（`auth.docker.io` 连接超时，拉不到 `node:22-alpine`；本机只有 `node:24-bookworm-slim`，
+且没有配镜像加速）。所以机制是确证的，**构建结果由真 CI 来验** ——
+那本来也是更权威的环境（Linux、从零开始）。
+
 ### 6.2 阻塞点二：部署 job 的 secrets 看起来没配 —— **未修**
 
 `gh secret list` 是空的。就算 build 修好，`deploy` 也会挂在拿不到
