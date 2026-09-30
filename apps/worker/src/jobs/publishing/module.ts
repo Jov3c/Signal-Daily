@@ -22,6 +22,7 @@
  */
 
 import { Inject, Module, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { shouldStartConsumers } from '../../common/consumers';
 import { Queue } from 'bullmq';
 import { parseEnv } from '@signal/config';
 import { createLogger } from '@signal/logger';
@@ -122,6 +123,10 @@ export class PublishingModule implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // 测试期不启动消费者。⚠ 这只挡住**本模块的 consumer** ——
+    // 调度器是独立 provider，它自己的钩子里也有一道同样的守卫。
+    if (!shouldStartConsumers()) return;
+
     // 调度器自己在 `onModuleInit` 里起定时器（它是 provider）。
     await this.worker.start();
     this.logger.info({}, 'publishing module initialised');

@@ -54,6 +54,7 @@ import {
 } from './queue';
 import { PUBLISHING_CLOCK, type PublishingClock } from './clock';
 import { PUBLISHING_LOGGER, PublishingService } from './publishing.service';
+import { shouldStartConsumers } from '../../common/consumers';
 
 /** 调度器醒来的间隔。 */
 export const SCHEDULER_TICK_INTERVAL_MS = 60_000;
@@ -109,6 +110,9 @@ export class PublishingScheduler implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
+    // 测试期不起调度定时器（统一开关见 `common/consumers.ts`）。
+    if (!shouldStartConsumers()) return;
+
     // ⚠ 与 Agent 04 的采集调度不同，这里**不需要分布式锁**：
     // 真正防止重复执行的是 JobId（见文件头第 2 层）。
     // 两个实例同时 tick 只会各自入队一次同一个 jobId，BullMQ 只留一个。

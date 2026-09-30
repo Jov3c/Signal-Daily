@@ -22,6 +22,7 @@
 
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { UnrecoverableError, Worker, type Job } from 'bullmq';
+import { shouldStartConsumers } from '../../common/consumers';
 import { QUEUE_CONCURRENCY, QueueName } from '@signal/contracts';
 import { serializeError, type Logger } from '@signal/logger';
 import { COLLECTOR_CONFIG, type CollectorConfig } from './collector.config';
@@ -59,6 +60,9 @@ export class CollectorWorker implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
+    // 测试期不启动消费者（统一开关见 `common/consumers.ts`）。
+    if (!shouldStartConsumers()) return;
+
     this.worker = new Worker<CollectorFetchSourcePayload>(
       QueueName.COLLECTOR,
       (job) => this.handle(job),

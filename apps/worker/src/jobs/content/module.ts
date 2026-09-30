@@ -27,6 +27,7 @@
  */
 
 import { Inject, Module, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { shouldStartConsumers } from '../../common/consumers';
 import { Queue } from 'bullmq';
 import { createLogger } from '@signal/logger';
 import { parseEnv } from '@signal/config';
@@ -115,6 +116,9 @@ export class ContentPipelineModule implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // 测试期不启动消费者 **与收尾扫描定时器** —— 两个都在这个方法里。
+    if (!shouldStartConsumers()) return;
+
     await this.worker.start();
 
     // ── 收尾扫描 ──────────────────────────────────────────────────

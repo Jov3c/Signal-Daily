@@ -77,6 +77,13 @@ export class RedisRateLimiter implements RateLimiter, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.redis.quit();
+    // ⚠ `quit()` 在**从未连上过**的连接上会先尝试建连再发 QUIT ——
+    // 于是「Redis 不可达时关进程」会抛 ECONNREFUSED，**把关闭流程也弄失败**。
+    //
+    // 关连接必须是尽力的：它对业务结果毫无影响（进程都要退出了），
+    // 却能决定 `app.close()` / `worker.close()` 是干净退出还是抛异常。
+    // 仓库里另外两处（`public-read`、`health`）本来就写了 `.catch`，
+    // 只有这里漏了 —— 集成时才现形（`apps/api/test/boot.spec.ts` 退出码非零）。
+    await this.redis.quit().catch(() => undefined);
   }
 }

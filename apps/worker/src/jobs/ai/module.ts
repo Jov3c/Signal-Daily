@@ -31,6 +31,7 @@
  */
 
 import { Module, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { shouldStartConsumers } from '../../common/consumers';
 import { createLogger } from '@signal/logger';
 import { parseEnv } from '@signal/config';
 import { AiService, AI_LOGGER } from './ai.service';
@@ -85,6 +86,10 @@ export class AiWorkerModule implements OnModuleInit, OnModuleDestroy {
 
   /** 随模块实例化启动消费者 —— `imports: [AiWorkerModule]` 即完成接线。 */
   async onModuleInit(): Promise<void> {
+    // 测试期不启动消费者（统一开关见 `common/consumers.ts`）。
+    // 本模块的文件头写着「这个开关应当是 Agent 14 对一个 app 内所有队列
+    // 模块的统一决策」—— 这个文件就是它的落地。
+    if (!shouldStartConsumers()) return;
     await this.worker.start();
   }
 

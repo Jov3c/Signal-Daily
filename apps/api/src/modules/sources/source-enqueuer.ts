@@ -109,6 +109,17 @@ export function redisConnectionOptions(redisUrl: string): ConnectionOptions {
     // BullMQ 要求：阻塞式命令不能被 ioredis 的默认重试次数打断，
     // 否则 Worker 侧会在网络抖动时抛出「max retries per request」。
     maxRetriesPerRequest: null,
+    // ⚠ 惰性连接。不写这一行，`BullSourceFetchEnqueuer` 在**构造函数**里
+    // 建 Queue 的那一刻就会去连 Redis。
+    //
+    // **实测效果（不是推测）**：Redis 在启动时不可达时，「模块被挂上」
+    // 产生的进程级未处理 rejection 从 **2 条降到 1 条** —— 减少但没有清零。
+    // 剩下的那 1 条来自 BullMQ 自己的连接引导（它会在内部再驱动一次 connect），
+    // 从这里改不到。详见 `handoffs/agent-14-HANDOFF.md` 的已知限制。
+    //
+    // 保留这一行的理由：入队是**用户触发**的（管理员点「立刻抓」），
+    // 启动期本来就不需要这条连接；惰性化是它正确的语义。
+    lazyConnect: true,
   };
   if (url.username !== '') options.username = decodeURIComponent(url.username);
   if (url.password !== '') options.password = decodeURIComponent(url.password);
@@ -189,7 +200,10 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.close();
+    // 关连接是尽力的：它对业务结果毫无影响（进程都要退出了），
+    // 却能决定 `app.close()` 是干净退出还是抛异常。
+    // 仓库里 `public-read` / `health` 本来就写了 `.catch`，这里补齐。
+    await this.close().catch(() => undefined);
   }
 }
 

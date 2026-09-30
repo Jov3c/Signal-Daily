@@ -7,11 +7,18 @@
 | **依赖**         | 02 / 08 / 09 / 10（全部已读）                                                                    |
 | **日期**         | 2026-09-30                                                                                       |
 | **状态**         | ✅ 已完成（含 1 项**自己发现并修掉的 P0**，见下）                                                |
-| **提交**         | `7f9921c`（前台 13 路由 + 视觉契约守卫）<br>`bcc585c`（**删掉吃掉首页的占位页** + 强制动态渲染） |
+| **提交**         | `7f9921c`（前台 14 路由 + 视觉契约守卫）<br>`bcc585c`（**删掉吃掉首页的占位页** + 强制动态渲染） |
 | **CCR**          | [CONTRACT_CHANGE_REQUEST-agent-13.md](./CONTRACT_CHANGE_REQUEST-agent-13.md)（8 项，无一阻塞）   |
 | **§23 独立审查** | 未做。见文末「关于 §23」。                                                                       |
 
 ---
+
+> ⚠ **2026-09-30 更正**：本文档初版把前台路由数写成 13、把视觉守卫数写成 47，
+> 实际是 **14 条路由**（今日 / 精选 / 日报 / 日报归档 / 日报某期 / X / 人物 /
+> 人物详情 / 主题 / 主题详情 / 收藏 / 搜索 / 文章 / 设置）与
+> **34 项**（`contract-parity` 另有 14 项，合计 48 项 web 测试）。
+> 由全量审查（`handoffs/REVIEW-REFACTOR-2026-09-30.md` 第 3 节 #4）发现，
+> 核对后确认是**我数错了**，不是代码问题。
 
 ## Task
 
@@ -26,7 +33,7 @@ progress / preferences / evidence summary / responsive）。
 
 ## Implemented
 
-### 1. 13 条路由，全部走真接口
+### 1. 14 条路由，全部走真接口
 
 ```text
 /                    今日        /today + /x（前三条 = 「X 今日声音」）
@@ -59,7 +66,7 @@ Agent 00 的 apps/web/app/page.tsx（渲染一句话）与
 → 「今日」从头到尾不可达
 → 构建通过、22 条路由都在、curl / 返回 200
 → Next 还把它预渲染成静态页（○ /，7.4KB 空壳，0 个 nav-item）
-→ 30 项视觉守卫全绿（它们断言「app/(site)/page.tsx 存在」——它确实存在）
+→ 当时那 30 项视觉守卫全绿（它们断言「app/(site)/page.tsx 存在」——它确实存在）
 ```
 
 修法（`bcc585c`）：
@@ -72,7 +79,7 @@ Agent 00 的 apps/web/app/page.tsx（渲染一句话）与
 - 加守卫：**每个 `page.tsx` 去掉路由组段后比对路径，有重复就红**，
   并断言 `app/page.tsx` 不存在。
 
-### 3. 视觉：**逐字移植**原型的 CSS，并加了 47 项契约守卫
+### 3. 视觉：**逐字移植**原型的 CSS，并加了 34 项契约守卫
 
 `app/globals.css` 是原型 `assets/styles.css` 的**逐字节**副本，
 并且**在 `.prettierignore` 里**：
@@ -81,7 +88,7 @@ Agent 00 的 apps/web/app/page.tsx（渲染一句话）与
 > 而 `docs/17` 的验收项 20 / 21 断言的正是**那几个字面量**。
 > 保持逐字节可比，也意味着 `diff` 就能看出「有没有人动过设计」。
 
-`apps/web/test/visual-contract.spec.ts`（47 项）直接对应验收项：
+`apps/web/test/visual-contract.spec.ts`（34 项）直接对应验收项：
 
 ```text
 20  hover token 精确 #FAF9F5 / 深色 #2B2A25（含「深色不许闪成浅色」）
@@ -131,7 +138,7 @@ apps/web/components/                shell / icons / cards / x-post / bookmark /
 apps/web/lib/                       api（服务端，转发 Cookie）/ client-api（浏览器，
                                     同源）/ format / nav / types / review-actions
 apps/web/types/globals.d.ts         `declare module '*.css'`（TS 5.6 起副作用 import 也要声明）
-apps/web/test/visual-contract.spec.ts   47 项
+apps/web/test/visual-contract.spec.ts   34 项
 apps/web/test/contract-parity.spec.ts   14 项
 ```
 
@@ -271,7 +278,7 @@ pnpm --filter @signal/web build   ✓ 编译通过，22 条路由（13 前台 + 
 ## 关于 §23
 
 **未做 §23 独立审查**（用户明确要求不要审查那么久）。
-替代：47 项视觉契约守卫 + 14 项镜像一致性守卫 + **真进程 curl 验证**
+替代：34 项视觉契约守卫 + 14 项镜像一致性守卫 + **真进程 curl 验证**
 （后者发现了 P0）。
 
 ⚠ **仍建议**一次轻量独立审查，重点看两处：

@@ -25,7 +25,7 @@
 import { Module } from '@nestjs/common';
 import { createAdapterRegistry } from './adapters';
 import { CLOCK, systemClock } from './clock';
-import { COLLECTOR_CONFIG, createCollectorConfig } from './collector.config';
+import { COLLECTOR_CONFIG, createCollectorConfig, type CollectorConfig } from './collector.config';
 import { ADAPTER_REGISTRY, CollectorService } from './collector.service';
 import { COLLECTOR_SERVICE, CollectorWorker } from './collector.worker';
 import { WORKER_LOGGER, createWorkerLogger } from './logger';
@@ -58,7 +58,27 @@ import { BullSourceFetchQueue } from './source-queue';
     { provide: RAW_ITEM_REPOSITORY, useClass: PrismaRawItemRepository },
     { provide: JOB_RUN_REPOSITORY, useClass: PrismaJobRunRepository },
     { provide: SOURCE_LOCK, useClass: RedisSourceLock },
-    { provide: SOURCE_FETCH_QUEUE, useClass: BullSourceFetchQueue },
+    // ⚠ 用 `useFactory` 而不是 `useClass` —— 这不是风格问题。
+    //
+    // `BullSourceFetchQueue` 的构造函数是
+    //   `(@Inject(COLLECTOR_CONFIG) config, queueName: string = QueueName.COLLECTOR)`。
+    // 第二个参数**有默认值、没有 `@Inject`**（它存在只为了让测试能用一个
+    // 自己的队列名，见那里的注释）。但 `useClass` 会让 Nest 去**解析它** ——
+    // token 是 `design:paramtypes` 里的 `String`，于是启动时炸：
+    //
+    //   Nest can't resolve dependencies of the BullSourceFetchQueue
+    //   (COLLECTOR_CONFIG, ?). The argument String at index [1] is not available.
+    //
+    // **而全部单测与集成测试都是绿的** —— 因为 `String` 这个元数据来自
+    // `tsc` 的产物，测试跑的是另一套 transform。也就是说：dist 崩、测试绿，
+    // 挂进根模块才暴露（Agent 08 那条教训的又一次复发）。
+    //
+    // `useFactory` 完全绕开参数元数据 —— 默认值由 JS 自己生效。
+    {
+      provide: SOURCE_FETCH_QUEUE,
+      useFactory: (config: CollectorConfig) => new BullSourceFetchQueue(config),
+      inject: [COLLECTOR_CONFIG],
+    },
 
     // 适配器注册表。deps 为空 = 用全局 fetch 与真实 DNS。
     { provide: ADAPTER_REGISTRY, useFactory: () => createAdapterRegistry() },

@@ -32,6 +32,7 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { serializeError, type Logger } from '@signal/logger';
+import { shouldStartConsumers } from '../../common/consumers';
 import { DUE_SOURCES_BATCH_SIZE } from '@signal/source-core';
 import { COLLECTOR_CONFIG, type CollectorConfig } from './collector.config';
 import { CLOCK, type Clock } from './clock';
@@ -77,6 +78,9 @@ export class SourceScheduler implements OnApplicationBootstrap, OnModuleDestroy 
   ) {}
 
   onApplicationBootstrap(): void {
+    // ⚠ 守卫放在**钩子**里而不是 `start()` 里：`start()` 是对外可调用的
+    //（文件里写着「重复调用是幂等的」），集成测试会直接调它去验调度逻辑。
+    if (!shouldStartConsumers()) return;
     this.start();
   }
 

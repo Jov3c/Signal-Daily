@@ -56,7 +56,12 @@ export function applyApiPrefix(app: INestApplication): void {
 }
 
 export async function createApiApp(options: CreateApiAppOptions = {}): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { logger: false });
+  const app = await NestFactory.create(AppModule, {
+    logger: false,
+    // ⚠ 同 worker 侧：`abortOnError` 默认 true，初始化失败会 `process.abort()`
+    // 并把错误吞掉。关掉之后 `main.ts` 的 `catch` 才能记下真正的启动失败原因。
+    abortOnError: false,
+  });
 
   applyApiPrefix(app);
   // 收到 SIGTERM / SIGINT 时优雅关闭，先停止接收新请求再释放资源。
