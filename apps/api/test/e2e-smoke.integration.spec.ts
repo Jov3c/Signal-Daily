@@ -77,7 +77,8 @@ afterAll(async () => {
 async function get(path: string): Promise<{ status: number; body: any }> {
   const response = await fetch(`${baseUrl}${path}`);
   const text = await response.text();
-  let body: unknown = null;
+  // 两个分支都赋值，所以不需要初值（lint 的 no-useless-assignment 会指出多余的初始化）。
+  let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
