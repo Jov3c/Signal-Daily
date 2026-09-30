@@ -252,10 +252,28 @@ build 阶段 COPY . . 带来了 schema，但 node_modules 是从 deps 继承的�
 
 修法：在 `build` 阶段 `COPY . .` 之后、`pnpm build` 之前加 `RUN pnpm db:generate`。
 
-⚠ **这条本地没能验证**：本机 **Docker Hub 不可达**
-（`auth.docker.io` 连接超时，拉不到 `node:22-alpine`；本机只有 `node:24-bookworm-slim`，
-且没有配镜像加速）。所以机制是确证的，**构建结果由真 CI 来验** ——
-那本来也是更权威的环境（Linux、从零开始）。
+⚠ **这条本地一开始没能验证**：本机 **Docker Hub 一度不可达**
+（`auth.docker.io` 连接超时，拉不到 `node:22-alpine`）。所以第一轮是靠真 CI 验的。
+
+**后来网络通了，本地也补验了一次，`DOCKER_BUILD_EXIT=0`：**
+
+```text
+#18 [build 1/4] COPY . .                              ✓
+#19 [build 2/4] RUN pnpm db:generate                  ✓  3.1s
+    ✔ Generated Prisma Client (v6.19.3) to …/node_modules/@prisma/client
+#20 [build 3/4] RUN pnpm build                         ✓ 12.5s
+#21 [build 4/4] RUN pnpm --filter @signal/web build   ✓ 36.1s
+```
+
+**牙齿对照**（两层，都是受控比较）：
+
+| 环境                 | Dockerfile       | 结果                                                                    |
+| -------------------- | ---------------- | ----------------------------------------------------------------------- |
+| CI（`2f75e1a`）      | 无 `db:generate` | ✗ `TS2305: no exported member 'SourceKind' / 'AiRunStatus' / 'Decimal'` |
+| CI（`496bdf4`）      | 有 `db:generate` | ✓ 三个 target 全过，镜像已推 GHCR                                       |
+| 本地（同 `496bdf4`） | 有 `db:generate` | ✓ `DOCKER_BUILD_EXIT=0`                                                 |
+
+两个 commit 的 Dockerfile **只差这一行**，所以这是一个干净的 A/B。
 
 ### 6.1c ✅ **已由真 CI 验证：这个项目历史上第一次构建成功**
 
