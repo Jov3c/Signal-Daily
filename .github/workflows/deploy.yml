@@ -83,6 +83,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ⚠ 仓库名 `Jov3c/Signal-Daily` **含大写**，而 GHCR 的引用名**必须全小写**。
+      # 直接用 `${{ github.repository }}` 打 tag 会让 buildx 报：
+      #   invalid tag "ghcr.io/Jov3c/Signal-Daily/api:…": repository name must be lowercase
+      # 而且它挂在**打 tag** 这一步 —— 三条 build 会全部作废。
+      #
+      # 这不是新问题：2026-10-01 查证，此前 **13 次运行全部失败在同一行**，
+      # 这个流水线从未成功过一次。修复前请先看一眼 `gh run list`。
+      # GitHub Actions 的表达式里没有 toLower，所以用一个 run 步骤算出来。
+      - name: 算出小写的镜像前缀
+        id: image
+        run: |
+          echo "prefix=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -99,8 +112,8 @@ jobs:
           push: true
           # 两个 tag：可追溯的 sha + 便于回滚的 previous
           tags: |
-            ghcr.io/${{ github.repository }}/${{ matrix.target }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/${{ matrix.target }}:latest
+            ${{ steps.image.outputs.prefix }}/${{ matrix.target }}:${{ github.sha }}
+            ${{ steps.image.outputs.prefix }}/${{ matrix.target }}:latest
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
 

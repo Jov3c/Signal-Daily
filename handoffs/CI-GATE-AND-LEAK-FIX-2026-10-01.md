@@ -20,10 +20,11 @@ push to main → docker build ×3 → VPS pull → migrate → compose up → he
 
 **从头到尾没有一步跑 lint / typecheck / test。** 而仓库里有 1950 个测试。
 
-所以：**一个会让登录链断掉的提交可以直接部署到生产。**
-这不是假设 —— `ed0b1a1` 修掉的那个登录缺陷（`verifyEmailCode` 漏读
-`{data:…}` 封套 → 登录成功后整页崩）在修好之前一直存在，
-而它所在的提交是推到了 main 的。
+> ⚠ **一句自我更正。** 本节初稿写的是「一个会让登录链断掉的提交**可以**直接部署到
+> 生产」。**那句话过强了。** 2026-10-01 查证真 CI 历史：这个流水线此前
+> **13 次运行全部失败**，**从未成功过一次** —— 所以没有任何东西进过生产。
+> 「没有测试门禁」这个**发现**成立，但当时给的**后果**描述不成立。
+> 阻塞点见 §6。
 
 ### 1.2 改之后
 
@@ -197,3 +198,65 @@ container 配置**，而写一个「没验过、又会拦住部署」的 job，�
 
 `agent-14-HANDOFF.md` §6.1（worker 侧 4 份 PrismaService）、§6.4（审查报告待裁决）、
 §6.5（完整业务 Smoke）均**未动**。
+
+---
+
+## 6. ⚠ 查证 CI 历史时发现：**部署流水线从未成功过一次**（三个阻塞点）
+
+改完门禁、推送之后去看真 CI，才发现 §1.1 那句「可以直接部署到生产」是**错的**。
+
+```text
+gh run list  →  13 次运行，13 次 failure，没有一次成功
+最早一次是 Agent 11 建这个 workflow 的那次提交（feat(agent-11): 部署编排…）
+```
+
+### 6.1 阻塞点一：仓库名含大写，GHCR 拒绝 —— ✅ **本次已修**
+
+```text
+ERROR: invalid tag "ghcr.io/Jov3c/Signal-Daily/api:…": repository name must be lowercase
+```
+
+`ghcr.io` 的引用名必须全小写，而 `Jov3c/Signal-Daily` 有大写。
+它挂在 buildx **打 tag** 这一步 —— 三条 build 全部作废。
+
+修法：加一个 `run` 步骤算小写前缀（GitHub Actions 的表达式里没有 `toLower`），
+`tags:` 改用它的输出。本地验过那行 shell 输出 `ghcr.io/jov3c/signal-daily`。
+
+### 6.2 阻塞点二：部署 job 的 secrets 看起来没配 —— **未修**
+
+`gh secret list` 是空的。就算 build 修好，`deploy` 也会挂在拿不到
+`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY`。
+
+（这也**部分**是好事：在 secrets 配好之前，修好 tag 也不会真的把东西推上生产。）
+
+### 6.3 ⚠ 阻塞点三：`docker-compose.yml` 里三个 app **只有 `build:`，没有 `image:`**
+
+这一条**比前两条都深**，而且**修 tag 修不掉它**：
+
+```text
+docker-compose.yml
+  api:    build: {...}      ← 没有 image:
+  worker: build: {...}      ← 没有 image:
+  web:    build: {...}      ← 没有 image:
+
+grep IMAGE_TAG docker-compose.yml  →  一次都没出现
+```
+
+而 `deploy.yml` 的部署步骤做的是：
+
+```yaml
+export IMAGE_TAG=${{ github.sha }}
+docker compose pull api worker web      # ← 这些服务没有 image:，没有东西可拉
+docker compose up -d --no-deps api worker web   # ← 会在 VPS 上**从源码重建**
+```
+
+也就是说 `docs/16` 那条设计 ——「GitHub Actions 构建镜像 → VPS **pull** → compose up」——
+**在 compose 里根本没有被实现**。即使前两个阻塞点都修好，VPS 也不会用到 CI 构建的镜像，
+而是本地重建（那还要求 VPS 上有源码、有构建能力）。
+
+**所以：本次只修了 tag。修完之后 `build` 会通过、镜像会推到 GHCR，
+但 `deploy` 仍然不会用它们。** 要让这条流水线按 `docs/16` 的设计真正跑起来，
+需要把 compose 的 api/worker/web 改成 `image: ghcr.io/jov3c/signal-daily/<target>:${IMAGE_TAG}`
+（并保留 `build:` 供本地开发，或用 override 文件分离两种形态）。
+
+⚠ 我**没有**动它：那是**部署架构**的改动，不是修一个笔误，且本地无法验证。
