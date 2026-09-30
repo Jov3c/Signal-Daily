@@ -35,7 +35,7 @@ import { BullContentEnqueuer, CONTENT_ENQUEUER } from './content-enqueuer';
 import { ContentPipelineWorker } from './content.worker';
 import { CONTENT_QUEUE_CONNECTION, parseRedisConnection } from './connection';
 import { CONTENT_PIPELINE_QUEUE_NAME } from './queue-names';
-import { AI_QUEUE_NAME } from '../ai/queue-names';
+import { AI_QUEUE_NAME } from '../ai';
 
 /**
  * 收尾扫描的间隔。

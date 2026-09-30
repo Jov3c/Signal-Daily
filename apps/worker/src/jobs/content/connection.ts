@@ -1,41 +1,22 @@
 /**
- * Redis 连接参数的解析。
+ * Redis 连接参数 —— 本模块只保留自己的注入 token。
  *
- * ⚠ 与 Agent 03（`apps/api/src/modules/sources/source-enqueuer.ts`）、
- * Agent 06（`jobs/ai/connection.ts`）是**同一件事的第三份实现**。
- * 已与其它 worker 侧重复一起记入 CCR。
+ * ── 为什么这里不再有第二份 `parseRedisConnection` ──────────────────
+ * 唯一实现留在 `jobs/ai/connection.ts`，并由 `jobs/ai/index.ts` 放上公开面。
+ * 本文件从**公开面**复用（`import { parseRedisConnection } from '../ai'`），
+ * 这与 `publishing/enqueuer.ts` 是同款做法 —— 那是跨模块走公开面，不是深入内部。
  *
- * 三个容易漏的点（都不是风格问题）：
- * 1. **空端口**：`redis://localhost` 的 `URL.port` 是空串，`Number('')` 是 `0`，
- *    直接透传会让 BullMQ 连 0 端口 → 必须回退 6379；
- * 2. **空用户名/密码**：空串不能传（会被当成一个真实用户）；
- * 3. **`rediss://`**：协议本身表达了 TLS，不显式传 `tls` 就会明文连接。
+ * 三个容易漏的点（空端口回退 6379 / 空用户名不传 / `rediss:` 补 tls）
+ * 因此只有一处实现、一处测试，见 `jobs/ai/connection.ts`。
+ *
+ * ⚠ 这与 `PrismaService` 的重复**不能类比**：PrismaService 有生命周期与连接，
+ * 各模块只能留一份；而 `parseRedisConnection` 是**纯函数**，
+ * 把唯一实现放在一个公开面上是正确且零代价的。
  */
 
-import type { ConnectionOptions } from 'bullmq';
+import { parseRedisConnection } from '../ai';
 
 /** 注入 token。 */
 export const CONTENT_QUEUE_CONNECTION = 'CONTENT_QUEUE_CONNECTION';
 
-const DEFAULT_REDIS_PORT = 6379;
-
-/** 把 `redis://` / `rediss://` 连接串解析成 BullMQ 的连接参数。 */
-export function parseRedisConnection(redisUrl: string): ConnectionOptions {
-  const parsed = new URL(redisUrl);
-
-  const port = parsed.port === '' ? DEFAULT_REDIS_PORT : Number(parsed.port);
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error(`Invalid Redis port in REDIS_URL: ${parsed.port}`);
-  }
-
-  const database = parsed.pathname.replace(/^\//, '');
-
-  return {
-    host: parsed.hostname,
-    port,
-    ...(parsed.username === '' ? {} : { username: decodeURIComponent(parsed.username) }),
-    ...(parsed.password === '' ? {} : { password: decodeURIComponent(parsed.password) }),
-    ...(database === '' ? {} : { db: Number(database) }),
-    ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
-  };
-}
+export { parseRedisConnection };
