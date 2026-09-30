@@ -4,7 +4,7 @@
 > 每个 Agent 在 **§23 独立审查通过之后、生成本文件同目录的 HANDOFF 时**，必须同时更新本看板。
 > 规则见《Signal 多 Agent 执行规则 v1.0》§24。
 
-**最后更新：** 2026-09-30 · Agent 13
+**最后更新：** 2026-09-30 · Agent 14
 
 ---
 
@@ -26,7 +26,7 @@
 | 3    | **11** | Ops                              | 00（完整部署前再读 01,02,04,05,06,08,10） | ✅ 已完成 | `3f8e819` `4f0b8b2`                                                   | [agent-11-HANDOFF.md](./agent-11-HANDOFF.md) |
 | 3    | **12** | Admin UI                         | 02, 03, 07, 08, 10                        | ✅ 已完成 | `515dec5` `6fd3851`                                                   | [agent-12-HANDOFF.md](./agent-12-HANDOFF.md) |
 | 3    | **13** | Public Web v1.7                  | 02, 08, 09, 10                            | ✅ 已完成 | `7f9921c` `bcc585c`                                                   | [agent-13-HANDOFF.md](./agent-13-HANDOFF.md) |
-| 4    | **14** | Final Integration                | **全部**                                  | ⬜ 未开始 | —                                                                     | —                                            |
+| 4    | **14** | Final Integration                | **全部**                                  | ✅ 已完成 | `9151f22`                                                             | [agent-14-HANDOFF.md](./agent-14-HANDOFF.md) |
 
 ### 状态取值（只用这五个）
 
@@ -44,15 +44,17 @@
 
 ## 当前可开工
 
-| Agent  | 说明                                                           |
-| ------ | -------------------------------------------------------------- |
-| **14** | **全部上游已完成**（00–13）。最终集成：根模块挂载 + 端到端走查 |
+**全部 14 个 Agent 已完成。** 没有下一个 Agent。
 
-> **Wave 1 / 1B / 2 / 2B / 3 全部完成**（02–13）。
-> ⚠ **只剩 14**，而它现在是**唯一**的阻塞点：在根 `AppModule` /
-> `worker.module.ts` 挂载完成之前，**没有任何一个页面或接口能被真正跑起来**。
-> Agent 12 / 13 的验证都止步于「SSR / 真 HTTP 正确」——
-> **没有任何一次点击被验证过**（P0 就是在这个盲区里发现的，见「当前阻塞」第 8 条）。
+剩下的都是**需要人决定或需要新做**的事，不是「下一个 Agent」：
+
+| #   | 事项                                                   | 出处                         |
+| --- | ------------------------------------------------------ | ---------------------------- |
+| 1   | ⚠ **浏览器点击级走查**（唯一没做过的验证层）           | `agent-14-HANDOFF.md` §6.2   |
+| 2   | worker 的 4 份 `PrismaService` 收敛为一份 `@Global()`  | §6.1                         |
+| 3   | 全量审查留下的 **5 条待裁决**                          | `work/review/审查报告.md` §6 |
+| 4   | 完整的**业务 Smoke** 链路（写库 + 队列 + worker 消费） | §6.5                         |
+| 5   | 那条「Redis 启动时不可达」的残留 rejection             | §6.3                         |
 
 ---
 
@@ -60,7 +62,7 @@
 
 无。
 
-> ⚠ 有**七项**已知项（Agent 14 必做）：
+> ⚠ 以下各项**曾经是** Agent 14 的前置条件 —— **已完成**（保留供追溯）：
 >
 > 1. `apps/api/src/app.module.ts` 尚未挂载 `CommonModule` + `AuthModule` + `SourcesModule`
 >    - `AdminReviewModule`（Agent 07），
@@ -466,6 +468,25 @@ HANDOFF 里的全部验证都由**作者自己**完成 —— 按本项目的经
   「不透露邮箱是否注册」语义
 * ⚠ 上报未改：`/featured` 把 `pipelineStatus`/`reviewStatus` 漏给公开响应
   （日报有投影层，精选没有）—— 属 Agent 08 的公开形状
+
+### Agent 14 — 最终集成 ✅
+
+**⚠ 未做 §23 独立审查**（理由见其 HANDOFF：本次交付的全部价值就是「真的跑起来」，
+三个缺陷是启动进程震出来的，不是读代码读出来的）。
+
+- 挂载 **13 个 API 模块 + 4 个 worker Job 模块**；`app.module.ts` / `worker.module.ts`
+- **统一开关**：`apps/worker/src/common/consumers.ts` 的 `shouldStartConsumers()`
+  —— `NODE_ENV=test` 时不启动任何消费者与定时器。6 个启动点各一行 early-return。
+  四个模块的文件头都写着「这是 Agent 14 的统一决策，不要各自发明」，这就是答复
+- **集成震出 3 个只在挂载时现形的缺陷**（都一直存在、都没被任何测试看见）：
+  1. `BullSourceFetchQueue` 的 `useClass` 让 Nest 解析一个无 `@Inject` 的 `string`
+     参数 → 启动即崩。**而全部单测是绿的**（`String` 元数据只在 `tsc` 产物里）
+  2. `public-read` 的 Redis 连接没有 `error` 监听器 → ioredis 绕过脱敏 logger 打 stderr
+  3. `abortOnError` 默认 true 让 Nest 把启动失败错误吞成 `exit code 134`
+- **新增端到端冒烟**（`e2e-smoke.integration.spec.ts`，7 项，真库真 Redis）——
+  **00–13 之后第一次有人真的把整个 API 起起来**
+- ⚠ **仍然没做的**：浏览器点击级走查（§6.2）、4 份 PrismaService 收敛（§6.1）、
+  完整业务 Smoke（§6.5）、审查报告的 5 条裁决（§6.4）
 
 ## 更新方法（Agent 完成后照做）
 
