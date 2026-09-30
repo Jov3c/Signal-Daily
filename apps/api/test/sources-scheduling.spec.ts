@@ -133,10 +133,14 @@ describe('redisConnectionOptions', () => {
       maxRetriesPerRequest: null,
       // ⚠ `lazyConnect` 是 Agent 14 集成时加的，理由见 `source-enqueuer.ts`：
       // 非惰性时，`BullSourceFetchEnqueuer` 在**构造函数**里就建 Queue 并连 Redis，
-      // 而 Redis 不可达时那条连接的失败会成为**进程级未处理的 rejection** ——
-      // 不影响功能，但会让 `pnpm test` 退出码非零，而「默认测试必须能在
-      // 没有 Redis 的机器上通过」是 Agent 00 的验收标准之一。
+      // 而 Redis 不可达时那条连接的失败会成为**进程级未处理的 rejection**。
       //
+      // ⚠ **2026-10-01 更正**：Agent 14 当时据此认为这一行已经解决了问题。
+      // 复测发现它**只把 rejection 从 2 条降到 1 条**，`pnpm test` 的退出码
+      // 仍然是 1。真正解决的是**把 Queue 也改成惰性构造**（同一个理由走完），
+      // 那之后退出码才是 0。详见 `source-enqueuer.ts` 里 `queue` 字段的注释。
+      //
+      // 这一行**仍然要留**：它是「连接不该在启动期建立」这条语义的一半。
       // 这条断言（精确 `toEqual`）正是抓住这个改动的守卫 —— 有牙齿，保留。
       lazyConnect: true,
     });

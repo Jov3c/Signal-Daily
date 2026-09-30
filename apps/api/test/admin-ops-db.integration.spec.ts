@@ -207,8 +207,25 @@ describe('作业运行历史（真表 job_runs）', () => {
   });
 
   it('按 jobType 筛选时看不到别的类型', async () => {
-    const { data } = await repository.listJobRuns({ page: 1, pageSize: 50 });
-    expect(data.some((row) => row.jobType === OTHER_JOB_TYPE)).toBe(true);
+    // 前提：表里**确实**存在另一类 jobType —— 否则下面那条断言恒真、毫无意义。
+    //
+    // ⚠ 这个前提用**带筛选**的查询确认，而不是「未筛选的 page 1 里必须出现它」。
+    // 后者是 2026-09-30 的写法，它在 2026-10-01 变成了红的：
+    //
+    // ```text
+    // job_runs 是**共享表**，历次集成测试不断追加 startedAt 更新的行；
+    // 本文件造的那条形如 2026-09-30T03:00:00Z，于是被挤出了第一页（pageSize 50）。
+    // ```
+    //
+    // 也就是说那条断言随**日历**和**跑过多少次**而变 —— 仓库自己的约定是
+    // 「共享库上的断言必须是**增量**，不是绝对值」，这条正好违反了它。
+    // 换成带筛选的存在性确认后，它验的还是同一件事，但不再依赖「谁更新」。
+    const others = await repository.listJobRuns({
+      page: 1,
+      pageSize: 1,
+      jobType: OTHER_JOB_TYPE,
+    });
+    expect(others.total).toBeGreaterThan(0);
 
     const filtered = await repository.listJobRuns({ page: 1, pageSize: 50, jobType: JOB_TYPE });
     expect(filtered.data.every((row) => row.jobType === JOB_TYPE)).toBe(true);

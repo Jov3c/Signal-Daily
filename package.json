@@ -16,6 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:ci": "vitest run --maxWorkers=4",
     "test:watch": "vitest",
     "test:db": "vitest run --config vitest.db.config.mts",
     "db:generate": "prisma generate",

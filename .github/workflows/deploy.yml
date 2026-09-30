@@ -22,8 +22,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── 测试门禁 ─────────────────────────────────────────────────────────
+  #
+  # ⚠ **这个 job 是 2026-10-01 补上的，而它此前不存在。**
+  #
+  # 在那之前，这个工作流是「push to main → 直接构建 → 迁移 → 上生产」，
+  # **从头到尾没有任何一步跑过测试** —— 尽管仓库里当时已有 1950 个测试。
+  # 换句话说：一个会让登录链断掉的提交可以直接部署到生产，而这**不是假设** ——
+  # `ed0b1a1` 修掉的那个登录缺陷（`verifyEmailCode` 漏读 `{data:…}` 封套，
+  # 登录成功后整页崩）在修好之前一直存在，而它所在的提交是推到了 main 的。
+  #
+  # `build` 依赖本 job：测试不过 → 不构建 → 不迁移 → 不切流量。
+  # 回滚 job 不受影响（它走的是 `failure()`，且用的是已存在的镜像）。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠ **不要**再加 `with: version:` —— 版本由 `package.json` 的
+      # `packageManager: pnpm@11.15.1` 决定，两处同时指定会直接报错。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      # ⚠ **两条都要，不是重复。** 根的 `pnpm typecheck` 只做
+      # `tsc -b` + 单独跑 web 的 typecheck；而 `@signal/api` 与 `@signal/worker`
+      # 各自的 typecheck 里还有一句 `tsc -p test/tsconfig.json` ——
+      # **只有 `-r` 那一遍会检查 `apps/*/test/**`**。
+      # 删掉 `-r` 会让两个 app 的测试目录重新变成「不参与类型检查」，
+      # 而那正是 `apps/api/src/modules/auth/mail-sender.ts` 里记着的老毛病。
+      - run: pnpm typecheck
+      - run: pnpm -r typecheck
+
+      # ⚠ **`--maxWorkers=4` 不是调优，是必需。** 默认会给每个测试文件起一个
+      # worker（本仓库约 86 个），把机器压到真监听端口的测试**假红**
+      # （boot / auth-mail / common-http，单独复跑全过）。
+      # 见 `handoffs/agent-14-HANDOFF.md` §5 与 WALKTHROUGH-FOLLOWUP §6。
+      # ⚠ 但 `visual-contract` / `contract-parity` / `client-api` 的红**是真红**。
+      - run: pnpm test:ci
+
+      - run: pnpm ops:verify
+
   # ── 构建并推镜像 ─────────────────────────────────────────────────────
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -210,7 +210,27 @@ lint / typecheck / 单测 / 两套集成 / build / ops —— 数字与它报告
 ⚠ 这个盲区已经造成过一次真实事故（`/` 被 Agent 00 的占位页吃掉，
 「今日」从头到尾不可达，而构建通过、`curl /` 返回 200、30 项守卫全绿）。
 
-### 6.3 一条进程级未处理的 rejection（Redis 在**启动时**不可达）
+### 6.3 一条进程级未处理的 rejection（Redis 在**启动时**不可达）—— ✅ **2026-10-01 已解决**
+
+> ⚠ **本节下面的结论有一处是错的，请先读这段再读原文。**
+>
+> 2026-10-01 为「CI 测试门禁」排查时**读到了确切的代码行**并修好了它
+> （`pnpm test` 退出码从 1 变成 0）。两处失实：
+>
+> | 本节原话                                      | 实测                                                          |
+> | --------------------------------------------- | ------------------------------------------------------------- |
+> | `AggregateError: connect ECONNREFUSED …:6379` | 复现出来的是 `Error: Connection is closed.`（完全不同的形状） |
+> | 「Redis **可达**时为零」（实测 6390）         | **可达时照样复现**                                            |
+>
+> **真正的根因**：被拒绝的是 ioredis 的 `connect()` promise 本身
+> （`ioredis/built/Redis.js:220`），由 BullMQ 的 `connectPromise` 持有。
+> `RedisConnection.close()` 只在 `status === 'ready'` 时走干净的 `quit()`；
+> 连接还在 `initializing` 时走 `disconnect()`，那个 promise 就没人接。
+> **而 `lazyConnect: true` 恰恰保证了关闭时一定是 `initializing`** ——
+> 是自造的必现竞态。所以「从应用侧改不到」这个结论也是错的：
+> 把 Queue 本身也改成惰性构造（没人入队就不建 Queue）即可。
+>
+> 完整记录见 [CI-GATE-AND-LEAK-FIX-2026-10-01.md](./CI-GATE-AND-LEAK-FIX-2026-10-01.md) §2。
 
 **现象**：Redis 不可达时，挂载 `AppModule` 会产生 **1 条**未处理的 rejection
 （`AggregateError: connect ECONNREFUSED …:6379`）。功能无影响，

@@ -109,16 +109,11 @@ export function redisConnectionOptions(redisUrl: string): ConnectionOptions {
     // BullMQ 要求：阻塞式命令不能被 ioredis 的默认重试次数打断，
     // 否则 Worker 侧会在网络抖动时抛出「max retries per request」。
     maxRetriesPerRequest: null,
-    // ⚠ 惰性连接。不写这一行，`BullSourceFetchEnqueuer` 在**构造函数**里
-    // 建 Queue 的那一刻就会去连 Redis。
+    // ⚠ 惰性连接：ioredis 在构造时不去连，第一条命令才连。
     //
-    // **实测效果（不是推测）**：Redis 在启动时不可达时，「模块被挂上」
-    // 产生的进程级未处理 rejection 从 **2 条降到 1 条** —— 减少但没有清零。
-    // 剩下的那 1 条来自 BullMQ 自己的连接引导（它会在内部再驱动一次 connect），
-    // 从这里改不到。详见 `handoffs/agent-14-HANDOFF.md` 的已知限制。
-    //
-    // 保留这一行的理由：入队是**用户触发**的（管理员点「立刻抓」），
-    // 启动期本来就不需要这条连接；惰性化是它正确的语义。
+    // **实测效果（2026-10-01 复测，与之前记录的不同）**：这一行把进程级
+    // 未处理 rejection 从 **2 条降到 1 条**，**但没有清零**。剩下的那 1 条
+    // 已经定位到确切的出处（见下面 `getQueue()` 的注释）。
     lazyConnect: true,
   };
   if (url.username !== '') options.username = decodeURIComponent(url.username);
@@ -131,7 +126,37 @@ export function redisConnectionOptions(redisUrl: string): ConnectionOptions {
 
 @Injectable()
 export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDestroy {
-  private readonly queue: Queue<CollectorFetchSourcePayload>;
+  /**
+   * ⚠ **Queue 本身也是惰性建的**（第一次入队时才建）—— 这是 2026-10-01 的改动。
+   *
+   * 只把连接设成 `lazyConnect` **不够**。此前那道只把进程级未处理 rejection
+   * 从 2 条降到 1 条，剩下那条的确切出处是：
+   *
+   * ```text
+   * ioredis/built/Redis.js:220   ← connect() 内部注册的 connectionCloseHandler
+   *   reject(new Error("Connection is closed."))
+   * ```
+   *
+   * 也就是说被拒绝的是 **`client.connect()` 这个 promise 本身**，它由
+   * `bullmq/dist/cjs/classes/node-redis-client.js` 持有（`connectPromise`）。
+   * BullMQ 的 `RedisConnection.close()` 只在 `status === 'ready'` 时走 `quit()`
+   * 那条干净路径；**只要连接还在 `initializing`，它就走 `disconnect()`**，
+   * 而那个 `connectPromise` 会随之被拒绝、且**没有任何人接** —— `disconnect()`
+   * 里那段 `this.initializing?.catch(() => {})` 只盖住了 `init()`，盖不住它。
+   *
+   * `lazyConnect` 恰恰**制造**了「关闭时仍处于 initializing」这个状态：
+   * 惰性连接意味着构造函数之后连接从未建立，于是 `app.close()` 来的时候
+   * 状态必然是 `initializing`。这是一个自造的必现竞态，不是运气问题
+   * （实测：Redis 在 6390 可达时同样复现）。
+   *
+   * 所以把同一个理由走完：那个文件头本来就说「入队是**用户触发**的，
+   * 启动期本来就不需要这条连接」。既然不需要连接，那就**也不需要 Queue**。
+   * 于是没有任何入队的进程（`boot.spec` 整条测试、端到端冒烟、以及生产里
+   * 没人点「立即抓取」的时刻）根本不会创建它。
+   */
+  private queue: Queue<CollectorFetchSourcePayload> | null = null;
+
+  private readonly connectionOptions: ConnectionOptions;
 
   private readonly timeoutMs: number;
 
@@ -142,9 +167,15 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
     @Inject(SOURCE_ENQUEUER_OPTIONS) options: SourceEnqueuerOptions,
   ) {
     this.timeoutMs = options.timeoutMs ?? ENQUEUE_TIMEOUT_MS;
-    this.queue = new Queue<CollectorFetchSourcePayload>(QueueName.COLLECTOR, {
-      connection: redisConnectionOptions(config.redisUrl),
+    this.connectionOptions = redisConnectionOptions(config.redisUrl);
+  }
+
+  /** 第一次入队时才建 Queue（因而才连 Redis）。 */
+  private getQueue(): Queue<CollectorFetchSourcePayload> {
+    this.queue ??= new Queue<CollectorFetchSourcePayload>(QueueName.COLLECTOR, {
+      connection: this.connectionOptions,
     });
+    return this.queue;
   }
 
   async enqueueFetchNow(sourceId: string, at: Date): Promise<EnqueuedSourceFetch> {
@@ -159,7 +190,7 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
 
     try {
       await withTimeout(
-        this.queue.add(JobName.COLLECTOR_FETCH_SOURCE, payload, {
+        this.getQueue().add(JobName.COLLECTOR_FETCH_SOURCE, payload, {
           jobId,
           attempts: COLLECTOR_RETRY.attempts,
           // 契约里的重试策略用 `delayMs`，BullMQ 用 `delay`。
@@ -196,6 +227,8 @@ export class BullSourceFetchEnqueuer implements SourceFetchEnqueuer, OnModuleDes
   }
 
   async close(): Promise<void> {
+    // 从未入队过 → Queue 从未被创建 → 也就没有连接要关。
+    if (this.queue === null) return;
     await this.queue.close();
   }
 
