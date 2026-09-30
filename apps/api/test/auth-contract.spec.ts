@@ -173,6 +173,28 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * 原生 SQL 的**唯一**判定规则。
+   *
+   * ⚠ 与 `ADMIN_CONTROLLER_PATTERN` 同一个理由抽到 describe 作用域：
+   * 下面「有牙齿」那条必须跑**同一套**正则。原来那条反证用的是
+   * `/\$(?:executeRaw|queryRaw|…)/` 这种「随便什么带 $queryRaw 的都算」的
+   * 粗正则会漏掉真正的判据 —— 那是同义反复。
+   */
+  const RAW_SQL_FORBIDDEN = [
+    // 原生写（`$executeRaw` 同时覆盖 `$executeRawUnsafe`）
+    /\$executeRaw/,
+    // 任何 `*Unsafe`（可以传拼接好的字符串）
+    /\$queryRawUnsafe/,
+    // `$queryRaw` 但**不是**标签模板：
+    //   允许 `$queryRaw\`` 与 `$queryRaw(Prisma.sql\``
+    //   禁止 `$queryRaw(sqlStringVar)` / `$queryRaw('SELECT ' + x)`
+    /\$queryRaw(?!\s*(?:<[^>]*>)?\s*(?:`|\(\s*Prisma\.sql))/,
+  ];
+
+  /** 「把角色写成 ADMIN」的字面量写法。 */
+  const ADMIN_LITERAL = /['"`]ADMIN['"`]/;
+
   it('业务模块里不出现绕过 ORM 的原生写库，也不出现 ADMIN 字面量', () => {
     // ⚠ 覆盖范围的**已知残余缺口**（独立审查指出，这里如实记录而不是假装覆盖）：
     //   动态值（`role: someVar`）、计算键名（`[k]: 'ADMIN'`）、以及通过
@@ -188,17 +210,20 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     // 公开搜索只能用原生 SQL **读**。
     //
     // 所以规则收紧成：**写**与**可拼接的读**一律禁止；只读的 `$queryRaw`
-    // 必须写成 `Prisma.sql` 标签模板（→ 参数化，注入进不来）。
-    const RAW_SQL_FORBIDDEN = [
-      // 原生写（`$executeRaw` 同时覆盖 `$executeRawUnsafe`）
-      /\$executeRaw/,
-      // 任何 `*Unsafe`（可以传拼接好的字符串）
-      /\$queryRawUnsafe/,
-      // `$queryRaw` 但**不是**紧跟 `Prisma.sql` 的标签模板形态
-      /\$queryRaw(?!\s*(?:<[^>]*>)?\s*\(\s*Prisma\.sql)/,
-    ];
-    const ADMIN_LITERAL = /['"`]ADMIN['"`]/;
-
+    // 必须写成标签模板（→ 参数化，注入进不来）。
+    //
+    // ⚠ `$queryRaw` 有**两种**同样是参数化的标签模板写法（Agent 11 补）：
+    //
+    // ```ts
+    // await prisma.$queryRaw`SELECT 1`                        // 直接用
+    // await prisma.$queryRaw(Prisma.sql`SELECT 1`)             // 显式 Prisma.sql
+    // ```
+    //
+    // 两者都把 `${}` 变成绑定参数，安全性没有区别。原来的正则只认第二种，
+    // 于是 Agent 11 的健康探针（`` $queryRaw`SELECT 1` ``，**连插值都没有**）
+    // 被误报。修法是把「标签模板」这个真正的判据写进正则，而不是要求
+    // 作者为了过守卫绕道 —— 后者会让人以为第一种写法不安全。
+    // 牙齿见下面「原生 SQL 守卫本身有牙齿」那条。
     const offenders = sourceFiles()
       .filter((file) => file.relativePath.startsWith('modules/'))
       .filter(
@@ -218,8 +243,27 @@ describe('源码围栏（静态扫描 apps/api/src）', () => {
     const LITERAL = "data: { role: 'ADMIN' }";
 
     expect(ROLE_ADMIN_WRITE_PATTERNS.some((p) => p.test(WRITE))).toBe(true);
-    expect(/\$(?:executeRaw|queryRaw|executeRawUnsafe|queryRawUnsafe)/.test(RAW)).toBe(true);
-    expect(/['"`]ADMIN['"`]/.test(LITERAL)).toBe(true);
+    expect(RAW_SQL_FORBIDDEN.some((p) => p.test(RAW))).toBe(true);
+    expect(ADMIN_LITERAL.test(LITERAL)).toBe(true);
+  });
+
+  it('原生 SQL 守卫本身有牙齿：两类标签模板放行，拼接与 *Unsafe 一律拒绝', () => {
+    const forbidden = (code: string): boolean => RAW_SQL_FORBIDDEN.some((p) => p.test(code));
+
+    // ── 放行：参数化的标签模板（`${}` 会被绑定成参数，注入进不来）──
+    expect(forbidden('await prisma.$queryRaw`SELECT 1`')).toBe(false);
+    expect(forbidden('await prisma.$queryRaw(Prisma.sql`SELECT 1`)')).toBe(false);
+    expect(forbidden('await prisma.$queryRaw<Row[]>`SELECT ${id}`')).toBe(false);
+    expect(forbidden('await prisma.$queryRaw(Prisma.sql`SELECT ${id}`)')).toBe(false);
+
+    // ── 拒绝：拼接出来的 SQL ──
+    expect(forbidden("await prisma.$queryRaw(`SELECT * FROM t WHERE id = ${id}`)")).toBe(true);
+    expect(forbidden("await prisma.$queryRaw('SELECT * FROM t WHERE id = ' + id)")).toBe(true);
+    expect(forbidden('await prisma.$queryRaw(sql)')).toBe(true);
+    // ── 拒绝：原生写 ──
+    expect(forbidden("await prisma.$executeRaw`DELETE FROM sessions`")).toBe(true);
+    expect(forbidden("await prisma.$executeRawUnsafe('DROP TABLE users')")).toBe(true);
+    expect(forbidden("await prisma.$queryRawUnsafe('SELECT 1')")).toBe(true);
   });
 
   /**

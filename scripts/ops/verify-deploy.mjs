@@ -147,7 +147,60 @@ if (nginx !== null) {
     /X-Request-Id/.test(nginx),
   );
   check('nginx: 只对外暴露 80/443', /listen\s+443/.test(nginx) && /listen\s+80/.test(nginx));
+  check(
+    'nginx: /health/ 也转发到 api（docs/04：健康检查不在 /api/v1 下）',
+    upstreamForApi !== undefined &&
+      new RegExp(
+        `location\\s+/health/\\s*\\{[\\s\\S]*?proxy_pass\\s+http://${upstreamForApi}`,
+      ).test(nginx),
+  );
 }
+
+/* ------------------------------------------------------------------ */
+/* 健康检查：路径必须与代码一致                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `/health/live` 与 `/health/ready` 的路径散落在**四处**（`docs/04`）：
+ * 控制器装饰器、`bootstrap.ts` 的 `exclude`、compose 的 healthcheck、
+ * `scripts/ops/healthcheck.sh`。
+ *
+ * ⚠ **逐字比对不在这里** —— 那需要 import `routes.ts` 导出的常量
+ * （`HEALTH_READY_PATH` 是模板字符串拼出来的，文本解析不可靠），
+ * 而本脚本是裸 node 跑 `.mjs`、import 不了 TS。逐字比对在
+ * `apps/api/test/health-routes.spec.ts` 里，那里能取到可执行的常量，
+ * 还会真的对那条路径发一次 HTTP。
+ *
+ * 这里负责的是**部署形态**那一半：exclude 有没有接上、compose 打的是不是
+ * `/health/` 而不是 `/api/v1/health/`、nginx 有没有把它转给 api。
+ * 少任何一条，容器会永远停在 `starting`，而 `pnpm test` 全绿。
+ */
+const routesFile = 'apps/api/src/modules/health/routes.ts';
+check(`${routesFile} 存在（健康检查路由的唯一真源）`, read(routesFile) !== null);
+
+const bootstrap = read('apps/api/src/bootstrap.ts');
+if (bootstrap !== null) {
+  // ⚠ 第一版写成 `\([^)]*exclude` —— 那是错的：实参里就有 `API_PREFIX.slice(1)`
+  // 这个括号，`[^)]*` 在它那里就停了，于是永远报失败。
+  // 这里按「同一行内」匹配，够用且不会被跨行吞掉。
+  check('bootstrap: setGlobalPrefix 带了 exclude', /setGlobalPrefix\s*\([^\n]*exclude/.test(bootstrap));
+  check(
+    'bootstrap: exclude 用的是健康模块导出的路由表（不是手写字面量）',
+    /HEALTH_ROUTE_EXCLUSIONS/.test(bootstrap),
+  );
+}
+
+if (compose !== null) {
+  const apiBlock = serviceBlock(compose, 'api');
+  const url = /https?:\/\/[^\s"'\\]+/.exec(apiBlock)?.[0];
+  check('compose: api healthcheck 里有一个 URL', url !== undefined);
+  check(
+    'compose: api healthcheck 打的是 /health/（**不在** /api/v1 下）',
+    url !== undefined && url.includes('/health/') && !url.includes('/api/'),
+    url ?? '（未找到 URL）',
+  );
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Dockerfile：多阶段 + 不含 secret                                     */
@@ -155,6 +208,28 @@ if (nginx !== null) {
 
 const dockerfile = read('infra/Dockerfile');
 check('infra/Dockerfile 存在', dockerfile !== null);
+
+/**
+ * ⚠ TLS 指南必须真的存在。
+ *
+ * `docker-compose.yml` 与 `nginx.conf` **两处**都写着「见
+ * `infra/nginx/README.md`」—— 第一版那份文件并不存在，于是文档里的人
+ * 被指向一个 404。这类悬空引用不会让任何测试变红，所以在这里钉住：
+ * 指南是任务书的「必须」项（compose / nginx same-origin / **TLS 指南**）。
+ */
+const nginxReadme = read('infra/nginx/README.md');
+check('infra/nginx/README.md 存在（compose 与 nginx.conf 都指向它）', nginxReadme !== null);
+if (nginxReadme !== null) {
+  // 指南必须覆盖那个真正的坑：证书不存在时 nginx 起不来，而 ACME 又需要
+  // nginx 提供 80。只写「用 certbot 签一张」是不够的。
+  check('TLS 指南讲了首次部署的自签占位（否则新机器起不来）', /openssl req -x509/.test(nginxReadme));
+  check('TLS 指南讲了续期', /renew/.test(nginxReadme));
+}
+
+// compose 与 nginx.conf 里提到的仓库内文件都必须存在（悬空引用守卫）。
+for (const referenced of ['infra/nginx/README.md', 'infra/nginx/nginx.conf', 'infra/mysql/my.cnf']) {
+  check(`compose 引用的 ${referenced} 存在`, read(referenced) !== null);
+}
 
 if (dockerfile !== null) {
   check('Dockerfile: 是多阶段构建（有 FROM ... AS）', /FROM\s+\S+\s+AS\s+\w+/i.test(dockerfile));
