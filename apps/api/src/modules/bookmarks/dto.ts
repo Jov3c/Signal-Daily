@@ -5,7 +5,8 @@
  * 且「字段没给」与「给了 null」的区别可以显式表达。
  */
 
-import { AppError, DEFAULT_CURSOR_LIMIT, PlatformErrorCode } from '@signal/contracts';
+import { DEFAULT_CURSOR_LIMIT } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 import { decodeBookmarkCursor } from './prisma-bookmarks.repository';
 
 /**
@@ -21,15 +22,9 @@ export type BookmarkListQuery = {
   cursor?: string;
 };
 
-/** 校验失败的统一抛出。`details.fields` 只含字段名与原因（不回显值）。 */
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
+// 本模块原先自带 `invalid` 的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid };
 
 /**
  * `GET /bookmarks` 的查询参数。

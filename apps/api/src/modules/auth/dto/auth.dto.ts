@@ -12,6 +12,7 @@
  * 下游若要 class-validator，可自行添加，不影响这里。
  */
 
+import { hasControlCharacter } from '../../../common/validation';
 import type { MeDto } from '../../users/dto/me.dto';
 
 /* ------------------------------------------------------------------ */
@@ -74,20 +75,6 @@ function parseEmail(raw: unknown, errors: string[]): string | null {
     return null;
   }
   return value;
-}
-
-/**
- * 是否含 ASCII 控制字符（含 CR / LF / NUL / DEL）。
- *
- * 用显式码点判断而不是正则字符类：正则写控制字符范围可读性差，
- * 而且容易在转义层被改坏。
- */
-function hasControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) return true;
-  }
-  return false;
 }
 
 /** `POST /auth/email/request-code` 的 body。 */

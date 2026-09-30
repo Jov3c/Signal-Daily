@@ -37,8 +37,9 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { AppError, PlatformErrorCode, envelope } from '@signal/contracts';
+import { envelope } from '@signal/contracts';
 import { AdminGuard } from '../../common/guards';
+import { invalid } from '../../common/validation';
 import { AdminOriginGuard } from './admin-origin.guard';
 import {
   parseCreateSourceBody,
@@ -47,16 +48,6 @@ import {
   type SourceDto,
 } from './dto/source.dto';
 import { SourcesService } from './service';
-
-/** 入参校验失败的统一抛出。`details.fields` 只含字段名与原因。 */
-function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
 
 /**
  * 守卫顺序是刻意的：**先 Origin 校验，再认证**。

@@ -8,13 +8,8 @@
  * 3. 校验规则本身就是契约（`docs/04` / `docs/09`），写在代码里比写在装饰器里好读。
  */
 
-import {
-  AppError,
-  EditorialReviewStatus,
-  EvidenceType,
-  MAX_PAGE_SIZE,
-  PlatformErrorCode,
-} from '@signal/contracts';
+import { EditorialReviewStatus, EvidenceType, MAX_PAGE_SIZE } from '@signal/contracts';
+import { invalid, parsePositiveInt } from '../../../common/validation';
 import { REVIEW_LIST_DEFAULTS } from './review.dto';
 import {
   BULK_REVIEW_ACTIONS,
@@ -25,24 +20,6 @@ import {
   type ReviewListQuery,
   type UpdateEvidenceInput,
 } from './review.dto';
-
-/** 校验失败的统一抛出。`details.fields` 只含字段名与原因（不回显值）。 */
-function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
-
-/** 解析正整数；缺省时用默认值，越界时夹到边界（**不报错** —— 分页参数不值得 400）。 */
-function parsePositiveInt(value: unknown, fallback: number, max: number): number {
-  if (value === undefined || value === null || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return Math.min(parsed, max);
-}
 
 /** 解析可选数字（非法值 → 报错，因为它是**筛选条件**，静默忽略会让管理员看到错误的结果集）。 */
 function parseOptionalNumber(value: unknown, field: string, errors: string[]): number | undefined {

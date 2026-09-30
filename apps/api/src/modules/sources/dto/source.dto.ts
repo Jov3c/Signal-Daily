@@ -23,6 +23,7 @@ import {
   type SourceKind,
   type SourceType,
 } from '@signal/contracts';
+import { hasControlCharacter } from '../../../common/validation';
 import type { SourceRecord } from '../repository';
 import {
   DEFAULT_FETCH_INTERVAL_SECONDS,
@@ -183,15 +184,6 @@ const TOP_LEVEL_KEYS: readonly string[] = [
 function rejectUnknownTopLevelKeys(record: Record<string, unknown>, errors: string[]): void {
   const unknown = Object.keys(record).filter((key) => !TOP_LEVEL_KEYS.includes(key));
   if (unknown.length > 0) errors.push(`unknown field(s): ${unknown.join(', ')}`);
-}
-
-/** 控制字符会进日志与响应头，任何字符串字段都不接受。 */
-function hasControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) return true;
-  }
-  return false;
 }
 
 function readStringField(

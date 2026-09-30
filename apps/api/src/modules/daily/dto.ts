@@ -9,17 +9,16 @@
  */
 
 import {
-  AppError,
   DAILY_DISPLAY_STYLES,
   DAILY_EDITION_STATUSES,
   DAILY_SECTION_TYPES,
   DAILY_TARGET_PUBLISH_HOUR,
-  PlatformErrorCode,
   isBusinessDate,
   type DailyDisplayStyle,
   type DailyEditionStatus,
   type DailySectionType,
 } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 import {
   MAX_CUSTOM_EXCERPT_LENGTH,
   MAX_CUSTOM_HEADLINE_LENGTH,
@@ -30,15 +29,9 @@ import {
   clampChars,
 } from './limits';
 
-/** 校验失败的统一抛出。`details.fields` 只含字段名与原因（不回显值）。 */
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
+// 本模块原先自带 `invalid` 的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid };
 
 /** 请求体必须是 JSON 对象。 */
 export function asRecord(body: unknown): Record<string, unknown> {

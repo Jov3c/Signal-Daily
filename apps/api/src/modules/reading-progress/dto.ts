@@ -5,7 +5,8 @@
  * 下面的形状是本模块定义并提了 CCR 的。
  */
 
-import { AppError, PlatformErrorCode } from '@signal/contracts';
+import { AppError } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 import {
   READING_RESOURCE_TYPES,
   isReadingResourceType,
@@ -22,14 +23,9 @@ export type UpsertProgressBody = {
   lastPosition: string | null;
 };
 
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
+// 本模块原先自带 `invalid` 的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid };
 
 /** 按**字符**截断（`Array.from` 而不是 `slice`：后者会劈开代理对）。 */
 export function clampChars(value: string | null, max: number): string | null {

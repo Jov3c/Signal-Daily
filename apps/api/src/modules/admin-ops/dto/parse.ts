@@ -13,15 +13,14 @@
  */
 
 import {
-  AppError,
   AI_RUN_STATUSES,
   DEFAULT_PAGE_SIZE,
   JOB_RUN_STATUSES,
   MAX_PAGE_SIZE,
-  PlatformErrorCode,
   type AiRunStatus,
   type JobRunStatus,
 } from '@signal/contracts';
+import { invalid, parsePositiveInt } from '../../../common/validation';
 import {
   NOTIFICATION_STATUSES,
   type JobRunListQuery,
@@ -29,23 +28,9 @@ import {
   type NotificationStatusValue,
 } from '../repository';
 
-/** 校验失败的统一抛出。`details.fields` 只含字段名与原因（不回显值）。 */
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
-
-/** 解析正整数；缺省时用默认值，越界时夹到边界（**不报错**）。 */
-export function parsePositiveInt(value: unknown, fallback: number, max: number): number {
-  if (value === undefined || value === null || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return Math.min(parsed, max);
-}
+// 本模块原先自带这两个函数的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid, parsePositiveInt };
 
 /** 可选字符串筛选；空串视为「没给」。 */
 function parseOptionalText(value: unknown): string | undefined {

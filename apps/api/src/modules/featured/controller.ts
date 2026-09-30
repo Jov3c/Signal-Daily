@@ -29,21 +29,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { AppError, PlatformErrorCode, envelope, cursorEnvelope } from '@signal/contracts';
+import { envelope, cursorEnvelope } from '@signal/contracts';
 import { AdminGuard, CurrentUser, type AuthUser } from '../../common/guards';
+import { invalid } from '../../common/validation';
 import { AdminOriginGuard } from '../admin-review/admin-origin.guard';
 import { FeaturedService } from './service';
 import { parseCreateFeaturedBody, parseFeaturedListQuery, parseUpdateFeaturedBody } from './dto';
-
-/** 入参校验失败。 */
-function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
 
 /** Admin 管理面。 */
 @UseGuards(AdminOriginGuard, AdminGuard)

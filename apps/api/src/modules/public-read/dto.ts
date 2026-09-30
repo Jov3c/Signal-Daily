@@ -13,7 +13,8 @@
  * - 枚举型筛选（`category`）→ 不校验取值，交给 SQL（查不到就是空列表）。
  */
 
-import { AppError, DEFAULT_CURSOR_LIMIT, PlatformErrorCode } from '@signal/contracts';
+import { DEFAULT_CURSOR_LIMIT } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 
 /** 一次公开列表最多返回多少条。 */
 export const MAX_PUBLIC_LIMIT = 50;
@@ -21,14 +22,9 @@ export const MAX_PUBLIC_LIMIT = 50;
 /** `/people/:slug` 这类详情页内嵌的内容条数上限。 */
 export const MAX_EMBEDDED_CONTENT_LIMIT = 30;
 
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
+// 本模块原先自带 `invalid` 的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid };
 
 /** 解析 `limit`：非法或越界一律收敛，**不报错**。 */
 export function parseLimit(value: unknown, fallback: number, max: number): number {

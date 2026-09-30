@@ -11,13 +11,12 @@
  */
 
 import {
-  AppError,
   ARTICLE_FONT_SIZES,
-  PlatformErrorCode,
   USER_THEMES,
   type ArticleFontSize,
   type UserTheme,
 } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 
 /** 可编辑的三个键（`docs/11`）。 */
 export const PREFERENCE_KEYS = ['theme', 'articleFontSize', 'defaultTranslation'] as const;
@@ -28,14 +27,9 @@ export type UpdatePreferencesBody = {
   defaultTranslation?: boolean;
 };
 
-export function invalid(errors: string[]): AppError {
-  return new AppError({
-    code: PlatformErrorCode.VALIDATION_FAILED,
-    httpStatus: 400,
-    safeMessage: 'Request validation failed',
-    details: { fields: errors },
-  });
-}
+// 本模块原先自带 `invalid` 的副本，现在统一从 `common/validation` 引用；
+// 对外仍继续导出，保持既有的导入面不变。
+export { invalid };
 
 /**
  * 解析 `PUT /me/preferences` 的请求体。

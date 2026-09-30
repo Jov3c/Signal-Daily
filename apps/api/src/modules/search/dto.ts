@@ -7,7 +7,7 @@
  *（空串会匹配几乎所有行），要么是攻击面（超长输入）。
  */
 
-import { AppError, PlatformErrorCode } from '@signal/contracts';
+import { invalid } from '../../common/validation';
 import { parseLimit } from '../public-read/dto';
 
 /**
@@ -54,14 +54,7 @@ export function parseSearchQuery(query: Record<string, unknown>): SearchQuery {
     else offset = parsed;
   }
 
-  if (errors.length > 0) {
-    throw new AppError({
-      code: PlatformErrorCode.VALIDATION_FAILED,
-      httpStatus: 400,
-      safeMessage: 'Request validation failed',
-      details: { fields: errors },
-    });
-  }
+  if (errors.length > 0) throw invalid(errors);
 
   return {
     q: (raw as string).trim(),
