@@ -82,16 +82,17 @@ describe('JobId 必须是 BullMQ 能接受的 3 段', () => {
     );
   });
 
-  it('**契约的 JobId.dailyDraft 仍然是坏的**（修好之后请删掉这条并切回契约）', () => {
-    const contractJobId = JobId.dailyDraft(DATE);
-
-    expect(contractJobId).toBe('daily-draft:2026-09-29');
-    expect(contractJobId.split(':')).toHaveLength(2);
-    // 这正是 BullMQ 会拒绝的形态（`Custom Id cannot contain :`）。
-    expect(isBullMqAcceptableJobId(contractJobId)).toBe(false);
-
-    // 而我们的 builder 不是它 —— 这一条防止「顺手改回契约 builder」。
-    expect(dailyDraftJobId(DATE, PUBLISHING_SLOT.GENERATE_DRAFT)).not.toBe(contractJobId);
+  it('⚠ 契约已统一：我们的 builder 就是契约的 builder（2026-09-30）', () => {
+    // 修复前契约产出 2 段（`daily-draft:2026-09-29`），本模块因此自造了一个 ——
+    // 四个 Agent 各自绕过一遍之后，2026-09-30 在契约里统一成 3 段。
+    // 这条断言现在的意思是「**没有第二份实现**」。
+    expect(dailyDraftJobId(DATE, PUBLISHING_SLOT.GENERATE_DRAFT)).toBe(
+      JobId.dailyDraft(DATE, PUBLISHING_SLOT.GENERATE_DRAFT),
+    );
+    expect(dailyPublishJobId(DATE, PUBLISHING_SLOT.PUBLISH)).toBe(
+      JobId.dailyPublish(DATE, PUBLISHING_SLOT.PUBLISH),
+    );
+    expect(isBullMqAcceptableJobId(JobId.dailyDraft(DATE, '0530'))).toBe(true);
   });
 });
 
@@ -178,7 +179,9 @@ describe('启动期自检', () => {
   it('**有牙齿**：把 jobId 换成契约那个坏形态，自检必须报错', () => {
     // 直接对判定函数下手，验证「3 段」这条规矩真的在起作用 ——
     // 而不是只验证「当前的常量恰好通过」。
-    expect(isBullMqAcceptableJobId(JobId.dailyDraft(DATE))).toBe(false);
+    // ⚠ 样本用**字面量的 2 段形态**（不用 `JobId.dailyDraft`）：
+    // 那才是这条断言要打的东西 —— BullMQ 的规则本身，与契约当前是什么无关。
+    expect(isBullMqAcceptableJobId('daily-draft:2026-09-29')).toBe(false);
     expect(isBullMqAcceptableJobId('daily-draft:2026-09-29:0530')).toBe(true);
     // 4 段同样会被 BullMQ 拒绝
     expect(isBullMqAcceptableJobId('daily-draft:2026-09-29:0530:extra')).toBe(false);
@@ -193,7 +196,8 @@ describe('启动期自检', () => {
    */
   it('有牙齿：jobId 换成 2 段契约形态 → 问题清单里有它', () => {
     const problems = publishingQueueProblems({
-      jobIdSamples: [JobId.dailyDraft(DATE)],
+      // 同样用字面量：契约现在产出 3 段，拿它当「坏样本」就测不到东西了。
+      jobIdSamples: ['daily-draft:2026-09-29'],
     });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/2 segments|BullMQ needs 3/);

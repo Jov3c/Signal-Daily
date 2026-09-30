@@ -28,7 +28,7 @@ import { createLogger } from '@signal/logger';
 import {
   CONTENT_PIPELINE_JOB_OPTIONS,
   assertContentQueueContract,
-  contractNormalizeJobIdIsBroken,
+  isContractNormalizeJobIdUsable,
   isBullMqAcceptableJobId,
   normalizeJobId,
 } from '../src/jobs/content/queue';
@@ -103,7 +103,12 @@ async function enqueue(
 
 /** 起一个真实消费者，service 换成计数替身。 */
 async function startWorker(service: unknown): Promise<void> {
-  worker = new ContentPipelineWorker({ service: service as never, connection, logger, concurrency: 1 });
+  worker = new ContentPipelineWorker({
+    service: service as never,
+    connection,
+    logger,
+    concurrency: 1,
+  });
   await worker.start();
 }
 
@@ -158,12 +163,15 @@ describe('JobId 契约', () => {
   it('**契约的 `JobId.normalize` 仍是坏的（2 段，被 BullMQ 拒绝）**', async () => {
     // 刻意钉住一个**已知缺陷**（已提 CCR 第 0 项）。
     // 契约修好之后这条会红 —— 那时应当删掉本模块的绕过 builder。
-    expect(contractNormalizeJobIdIsBroken()).toBe(true);
-    const jobId = uniqueId();
+    // ⚠ **2026-09-30 契约已统一**：`JobId.normalize` 现在产出 3 段。
+    // 这条断言从「契约是坏的」翻成了「契约可用」——
+    // 而下面那条「2 段字面量被 BullMQ 拒绝」仍然保留：
+    // 它证明的是 **BullMQ 的规则本身**，不是契约的状态。
+    //（两者必须分开写：契约会变，BullMQ 的规则不会。）
+    expect(isContractNormalizeJobIdUsable()).toBe(true);
     await expect(
       queue.add(JobName.CONTENT_NORMALIZE, { rawItemId: '1' }, { jobId: 'normalize:1' }),
     ).rejects.toThrow(/Custom Id cannot contain/);
-    void jobId;
   });
 
   it('启动期自检通过（Job 名→队列映射 + JobId 段数）', () => {
@@ -242,7 +250,11 @@ describe('队列消费与重试（真 Redis）', () => {
       clusterContent: async () => null,
     });
 
-    const jobId = await enqueue(JobName.CONTENT_NORMALIZE, { rawItemId: 'not-a-number' }, uniqueId());
+    const jobId = await enqueue(
+      JobName.CONTENT_NORMALIZE,
+      { rawItemId: 'not-a-number' },
+      uniqueId(),
+    );
     await waitForTerminal(jobId);
     await settle();
 

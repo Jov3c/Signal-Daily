@@ -55,7 +55,7 @@ function serviceBlock(source, service) {
   const start = source.indexOf(`\n  ${service}:`);
   if (start === -1) return '';
   const rest = source.slice(start + 1);
-  const next = rest.slice(1).search(/\n  [a-z][a-z0-9_-]*:/);
+  const next = rest.slice(1).search(/\n {2}[a-z][a-z0-9_-]*:/);
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
@@ -76,8 +76,14 @@ if (compose !== null) {
   const services = ['mysql', 'redis', 'api', 'worker', 'web', 'nginx'];
   for (const service of services) {
     check(`compose 里有 ${service} 服务`, new RegExp(`^  ${service}:`, 'm').test(compose));
-    check(`compose: ${service} 有 healthcheck`, serviceBlock(compose, service).includes('healthcheck:'));
-    check(`compose: ${service} 有日志轮转`, serviceBlock(compose, service).includes('logging: *default-logging'));
+    check(
+      `compose: ${service} 有 healthcheck`,
+      serviceBlock(compose, service).includes('healthcheck:'),
+    );
+    check(
+      `compose: ${service} 有日志轮转`,
+      serviceBlock(compose, service).includes('logging: *default-logging'),
+    );
   }
 
   // ⚠ 这两条是 `docs/16` 的「不暴露公网」，也是本文件最要紧的断言。
@@ -98,7 +104,8 @@ if (compose !== null) {
   );
   check(
     'compose: nginx 映射了 80 与 443',
-    serviceBlock(compose, 'nginx').includes('80:80') && serviceBlock(compose, 'nginx').includes('443:443'),
+    serviceBlock(compose, 'nginx').includes('80:80') &&
+      serviceBlock(compose, 'nginx').includes('443:443'),
   );
 
   check(
@@ -124,12 +131,16 @@ if (nginx !== null) {
   check(
     'nginx: / 转发到 web',
     upstreamForWeb !== undefined &&
-      new RegExp(`location\\s+/\\s*\\{[\\s\\S]*?proxy_pass\\s+http://${upstreamForWeb}`).test(nginx),
+      new RegExp(`location\\s+/\\s*\\{[\\s\\S]*?proxy_pass\\s+http://${upstreamForWeb}`).test(
+        nginx,
+      ),
   );
   check(
     'nginx: /api/ 转发到 api',
     upstreamForApi !== undefined &&
-      new RegExp(`location\\s+/api/\\s*\\{[\\s\\S]*?proxy_pass\\s+http://${upstreamForApi}`).test(nginx),
+      new RegExp(`location\\s+/api/\\s*\\{[\\s\\S]*?proxy_pass\\s+http://${upstreamForApi}`).test(
+        nginx,
+      ),
   );
   check(
     'nginx: `X-Request-Id` 透传（docs/15：贯穿 Web → API → Queue → Worker）',
@@ -149,7 +160,9 @@ if (dockerfile !== null) {
   check('Dockerfile: 是多阶段构建（有 FROM ... AS）', /FROM\s+\S+\s+AS\s+\w+/i.test(dockerfile));
   check(
     'Dockerfile: 提供 api / worker / web 三个 target',
-    ['api', 'worker', 'web'].every((target) => new RegExp(`FROM\\s+\\S+\\s+AS\\s+${target}\\b`, 'i').test(dockerfile)),
+    ['api', 'worker', 'web'].every((target) =>
+      new RegExp(`FROM\\s+\\S+\\s+AS\\s+${target}\\b`, 'i').test(dockerfile),
+    ),
   );
   // 镜像里不能有 secret：不许 COPY .env*，不许把 secret 写成 ENV/ARG 的默认值
   check('Dockerfile: 没有 COPY .env', !/COPY\s+[^\n]*\.env/i.test(dockerfile));
@@ -163,7 +176,12 @@ const dockerignore = read('.dockerignore');
 check('.dockerignore 存在（镜像不含 secret 的另一半）', dockerignore !== null);
 if (dockerignore !== null) {
   for (const pattern of ['.env', 'node_modules', '.git']) {
-    check(`.dockerignore 排除了 ${pattern}`, dockerignore.split('\n').some((line) => line.trim() === pattern || line.trim() === `${pattern}/`));
+    check(
+      `.dockerignore 排除了 ${pattern}`,
+      dockerignore
+        .split('\n')
+        .some((line) => line.trim() === pattern || line.trim() === `${pattern}/`),
+    );
   }
 }
 
@@ -186,16 +204,17 @@ for (const script of [
     // 真正该查的是 **git index 里的 mode**（100755）：
     // 那才是 clone 到 Linux 上之后文件会有的权限。
     // 所以优先用 `git ls-files -s`，非 git 环境才退回 stat。
-    let executable = false;
-    try {
-      const out = execFileSync('git', ['ls-files', '-s', '--', script], {
-        cwd: ROOT,
-        encoding: 'utf8',
-      });
-      executable = out.trim().startsWith('100755');
-    } catch {
-      executable = (statSync(`${ROOT}${script}`).mode & 0o111) !== 0;
-    }
+    const executable = (() => {
+      try {
+        const out = execFileSync('git', ['ls-files', '-s', '--', script], {
+          cwd: ROOT,
+          encoding: 'utf8',
+        });
+        return out.trim().startsWith('100755');
+      } catch {
+        return (statSync(`${ROOT}${script}`).mode & 0o111) !== 0;
+      }
+    })();
     check(`${script} 在 git index 里是可执行的（mode 100755）`, executable);
   }
 }
@@ -203,9 +222,15 @@ for (const script of [
 const backup = read('scripts/ops/backup-mysql.sh');
 if (backup !== null) {
   check('backup: 用 mysqldump', /mysqldump/.test(backup));
-  check('backup: 备份前先记 binlog 位置（RPO 要靠它 replay）', /SHOW MASTER STATUS|SHOW BINARY LOG STATUS/.test(backup));
+  check(
+    'backup: 备份前先记 binlog 位置（RPO 要靠它 replay）',
+    /SHOW MASTER STATUS|SHOW BINARY LOG STATUS/.test(backup),
+  );
   check('backup: 加密（docs/16：备份加密后上传）', /openssl enc|age |gpg /.test(backup));
-  check('backup: 保留策略 7 daily / 4 weekly / 6 monthly', /7[\s\S]{0,200}4[\s\S]{0,200}6/.test(backup));
+  check(
+    'backup: 保留策略 7 daily / 4 weekly / 6 monthly',
+    /7[\s\S]{0,200}4[\s\S]{0,200}6/.test(backup),
+  );
   check('backup: 上传 R2（rclone）', /rclone/.test(backup));
 }
 
@@ -213,12 +238,18 @@ const restore = read('scripts/ops/restore-mysql.sh');
 if (restore !== null) {
   check('restore: 解压/解密还原', /openssl enc|rclone|zcat|gunzip/.test(restore));
   check('restore: replay binlog', /mysqlbinlog/.test(restore));
-  check('restore: 之后核对 migrate status（docs/16 第 4 步）', /migrate\s+(status|deploy)/.test(restore));
+  check(
+    'restore: 之后核对 migrate status（docs/16 第 4 步）',
+    /migrate\s+(status|deploy)/.test(restore),
+  );
 }
 
 const healthcheck = read('scripts/ops/healthcheck.sh');
 if (healthcheck !== null) {
-  check('healthcheck: 打 /health/live 与 /health/ready', /health\/live/.test(healthcheck) && /health\/ready/.test(healthcheck));
+  check(
+    'healthcheck: 打 /health/live 与 /health/ready',
+    /health\/live/.test(healthcheck) && /health\/ready/.test(healthcheck),
+  );
 }
 
 /* ------------------------------------------------------------------ */

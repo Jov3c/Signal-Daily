@@ -17,7 +17,7 @@ export {
   CONTENT_PIPELINE_RETRY,
   NORMALIZER_VERSION,
   assertContentQueueContract,
-  contractNormalizeJobIdIsBroken,
+  isContractNormalizeJobIdUsable,
   isBullMqAcceptableJobId,
   normalizeJobId,
   type ContentNormalizeJobData,

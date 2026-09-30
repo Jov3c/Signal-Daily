@@ -183,5 +183,6 @@ export function classifyScoreJobId(contentId: string, promptVersion: string): st
  * 建议 Agent 14 把它补进 `packages/contracts/src/queues.ts` 的 `JobId`。
  */
 export function translateJobId(contentId: string, promptVersion: string): string {
-  return `translate:${contentId}:${promptVersion}`;
+  // ⚠ 委托契约的唯一真源（2026-09-30 统一；此前是本模块自造的）。
+  return JobId.aiTranslate(contentId, promptVersion);
 }

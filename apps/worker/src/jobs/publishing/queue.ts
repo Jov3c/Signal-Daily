@@ -63,6 +63,8 @@
  */
 
 import {
+  BULLMQ_JOBID_SEGMENTS as CONTRACT_BULLMQ_JOBID_SEGMENTS,
+  JobId,
   JobName,
   JOB_TO_QUEUE,
   PUBLISHING_RETRY,
@@ -149,7 +151,7 @@ export const PUBLISHING_RETRY_POLICY: RetryPolicy = PUBLISHING_RETRY;
 /* ------------------------------------------------------------------ */
 
 /** BullMQ 对自定义 jobId 的段数要求（含 `:` 时必须恰好 3 段）。 */
-export const BULLMQ_JOBID_SEGMENTS = 3;
+export const BULLMQ_JOBID_SEGMENTS = CONTRACT_BULLMQ_JOBID_SEGMENTS;
 
 /** 该 jobId 是否会被 BullMQ 接受。 */
 export function isBullMqAcceptableJobId(jobId: string): boolean {
@@ -164,12 +166,14 @@ export function isBullMqAcceptableJobId(jobId: string): boolean {
  * 因此这里用 3 段形态。第三段是**调度槽**（不是凑数）。
  */
 export function dailyDraftJobId(businessDate: string, slot: PublishingSlot): string {
-  return `daily-draft:${businessDate}:${slot}`;
+  // ⚠ 委托契约的唯一真源（2026-09-30 统一；此前是本模块自造的）。
+  // 第三段 `slot` 是必需的：同一业务日有多趟草稿生成。
+  return JobId.dailyDraft(businessDate, slot);
 }
 
 /** 生成 `publishing.daily-publish` 的幂等 JobId（同样是 3 段，理由同上）。 */
 export function dailyPublishJobId(businessDate: string, slot: PublishingSlot): string {
-  return `daily-publish:${businessDate}:${slot}`;
+  return JobId.dailyPublish(businessDate, slot);
 }
 
 /* ------------------------------------------------------------------ */

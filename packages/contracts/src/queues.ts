@@ -64,22 +64,111 @@ export const JOB_TO_QUEUE: Readonly<Record<JobNameValue, QueueNameValue>> = {
 /**
  * JobId 决定 BullMQ 幂等。同参数重复入队必须得到同一个 JobId。
  * 禁止各模块自行拼接 JobId 字符串，一律使用下列 builder。
+ *
+ * ── ⚠ `bullmq@5` 的硬规则：含 `:` 的 jobId 必须**恰好 3 段** ────────
+ *
+ * `bullmq` 的 `Job` 构造函数里有这条（为兼容旧的 repeatable job 而留）：
+ *
+ * ```js
+ * if (this.opts?.jobId?.includes(':') && this.opts?.jobId?.split(':').length !== 3) {
+ *   throw new Error('Custom Id cannot contain :');
+ * }
+ * ```
+ *
+ * 也就是 2 段会被**同步拒绝**（`queue.add()` 直接抛，不是异步失败）。
+ *
+ * ── 这段注释记着一件不该再发生的事 ──────────────────────────────────
+ * 本契约原先有 **2/4 个 builder 产出 2 段**（`normalize` 与 `dailyDraft`），
+ * 于是「照着契约用」等于「入队必炸」。这件事被**四个 Agent 各自发现、
+ * 各自绕过了一遍**：
+ *
+ * ```text
+ * Agent 06  独立审查发现，提 CCR 第 0 项（并自造 translateJobId）
+ * Agent 05  在自己的 CCR 里重申（并自造 3 段 normalizeJobId）
+ * Agent 08  自造 dailyDraftJobId / dailyPublishJobId，并补了**真 Redis 证据**
+ * Agent 10  再次记录
+ * ```
+ *
+ * **四份重复实现就是「没在源头修」的成本。** 2026-09-30 统一：
+ * 六个 builder 全部产出 3 段，第三段都是**真实存在、会变化、且需要参与
+ * 幂等键**的维度（不是为了让段数凑够 3）：
+ *
+ * | builder | 第三段 | 为什么它必须在幂等键里 |
+ * | ------- | ------ | ---------------------- |
+ * | `collectorFetchSource` | `window` | 同一来源的不同抓取窗口是不同任务 |
+ * | `normalize` | `ruleVersion` | 清洗/提取规则改版后，历史内容要能重新归一化 |
+ * | `aiScore` / `aiTranslate` | `promptVersion` | prompt 改版后必须能重评/重译 |
+ * | `dailyDraft` / `dailyPublish` | `slot` | **同一业务日有多趟**（00:10/05:30/07:00/08:00）—— 段数不区分的话，BullMQ 会把后一趟当重复任务**直接丢掉且不报错** |
+ *
+ * `assertAllJobIdBuildersAreAcceptable()` 是执行期的不变式，
+ * `queues.spec.ts` 里有一条守卫对着**每一个** builder 断言它可以被 BullMQ 接受。
  */
 export const JobId = {
   /** `collector:{sourceId}:{window}` */
   collectorFetchSource: (sourceId: string, window: string): string =>
     `collector:${sourceId}:${window}`,
 
-  /** `normalize:{rawItemId}` */
-  normalize: (rawItemId: string): string => `normalize:${rawItemId}`,
+  /** `normalize:{rawItemId}:{ruleVersion}` —— ⚠ 第三段是**必需**的（见上方说明）。 */
+  normalize: (rawItemId: string, ruleVersion: string): string =>
+    `normalize:${rawItemId}:${ruleVersion}`,
 
   /** `ai-score:{contentId}:{promptVersion}` */
   aiScore: (contentId: string, promptVersion: string): string =>
     `ai-score:${contentId}:${promptVersion}`,
 
-  /** `daily-draft:{businessDate}` */
-  dailyDraft: (businessDate: string): string => `daily-draft:${businessDate}`,
+  /** `translate:{contentId}:{promptVersion}` */
+  aiTranslate: (contentId: string, promptVersion: string): string =>
+    `translate:${contentId}:${promptVersion}`,
+
+  /** `daily-draft:{businessDate}:{slot}` —— ⚠ 第三段是**必需**的（见上方说明）。 */
+  dailyDraft: (businessDate: string, slot: string): string => `daily-draft:${businessDate}:${slot}`,
+
+  /** `daily-publish:{businessDate}:{slot}` */
+  dailyPublish: (businessDate: string, slot: string): string =>
+    `daily-publish:${businessDate}:${slot}`,
 } as const;
+
+/** `bullmq@5` 对含 `:` 的自定义 jobId 要求的段数。 */
+export const BULLMQ_JOBID_SEGMENTS = 3;
+
+/** 该 jobId 是否会被 BullMQ 接受（不含 `:` 的 id 不受这条规则约束）。 */
+export function isBullMqAcceptableJobId(jobId: string): boolean {
+  if (!jobId.includes(':')) return true;
+  return jobId.split(':').length === BULLMQ_JOBID_SEGMENTS;
+}
+
+/**
+ * 执行期不变式：**每一个** builder 的产物都必须能被 BullMQ 接受。
+ *
+ * ⚠ 必须**真的被调用**，否则就是死代码 —— 本项目已经有过一次教训
+ *（Agent 06 的独立审查发现「`assertQueueMapping()` 从来没有调用点，
+ * 掏空它测试仍全绿」）。
+ *
+ * 调用点：`queues.spec.ts` 的守卫，以及各 worker 模块的启动自检。
+ */
+export function assertAllJobIdBuildersAreAcceptable(): void {
+  const samples: [string, string][] = [
+    ['collectorFetchSource', JobId.collectorFetchSource('1', 'w')],
+    ['normalize', JobId.normalize('1', 'v1')],
+    ['aiScore', JobId.aiScore('1', 'v1')],
+    ['aiTranslate', JobId.aiTranslate('1', 'v1')],
+    ['dailyDraft', JobId.dailyDraft('2026-09-30', '0530')],
+    ['dailyPublish', JobId.dailyPublish('2026-09-30', '0800')],
+  ];
+
+  const problems = samples
+    .filter(([, jobId]) => !isBullMqAcceptableJobId(jobId))
+    .map(
+      ([name, jobId]) =>
+        `${name} -> ${jobId}（${String(jobId.split(':').length)} 段，BullMQ 要求 ${String(BULLMQ_JOBID_SEGMENTS)} 段）`,
+    );
+
+  if (problems.length > 0) {
+    throw new Error(
+      `JobId 契约被破坏 —— 这些 builder 的产物会让 queue.add() 同步抛错：\n- ${problems.join('\n- ')}`,
+    );
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Concurrency                                                         */

@@ -151,14 +151,25 @@ describe('builder 的产物真的能被 BullMQ 接受（Agent 06 的 P0 回归�
     expect(job.id).toBe(jobId);
   });
 
-  it('⚠ **契约的 `JobId.dailyDraft` 被 BullMQ 拒绝**（这就是本模块自造 builder 的原因）', async () => {
-    const contractJobId = JobId.dailyDraft(uniqueDate());
+  it('⚠ **契约的 `JobId.dailyDraft` 现在能被 BullMQ 接受**（2026-09-30 统一）', async () => {
+    // 修复前它产出 `daily-draft:{date}`（2 段）→ 这里会抛
+    // `Custom Id cannot contain :`。契约与我们的 builder 现在是同一个函数。
+    const contractJobId = JobId.dailyDraft(uniqueDate(), PUBLISHING_SLOT.GENERATE_DRAFT);
 
+    const job = await queue.add(
+      JobName.PUBLISHING_DAILY_DRAFT,
+      { businessDate: DATE, slot: PUBLISHING_SLOT.GENERATE_DRAFT },
+      { ...PUBLISHING_JOB_OPTIONS, jobId: contractJobId },
+    );
+    expect(job.id).toBe(contractJobId);
+
+    // ⚠ 顺手把「BullMQ 的规则本身」验一次 —— 它与契约的状态是两件事：
+    // 契约会变，BullMQ 的规则不会。用**字面量的 2 段**去撞它。
     await expect(
       queue.add(
         JobName.PUBLISHING_DAILY_DRAFT,
         { businessDate: DATE, slot: PUBLISHING_SLOT.GENERATE_DRAFT },
-        { ...PUBLISHING_JOB_OPTIONS, jobId: contractJobId },
+        { ...PUBLISHING_JOB_OPTIONS, jobId: `daily-draft:${DATE}` },
       ),
     ).rejects.toThrow(/Custom Id cannot contain/);
   });

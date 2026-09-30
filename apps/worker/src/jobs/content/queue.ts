@@ -39,7 +39,14 @@
  * 而是一个**真实存在、会变化、且需要参与幂等键**的维度。
  */
 
-import { JobId, JobName, JOB_TO_QUEUE, QueueName, type RetryPolicy } from '@signal/contracts';
+import {
+  BULLMQ_JOBID_SEGMENTS,
+  JobId,
+  JobName,
+  JOB_TO_QUEUE,
+  QueueName,
+  type RetryPolicy,
+} from '@signal/contracts';
 
 /**
  * 归一化规则的版本。
@@ -95,13 +102,16 @@ export const CONTENT_PIPELINE_JOB_OPTIONS = {
  * 因此这里用 3 段形态。第三段是归一化规则版本（不是凑数）。
  */
 export function normalizeJobId(rawItemId: string, version: string = NORMALIZER_VERSION): string {
-  return `normalize:${rawItemId}:${version}`;
+  // ⚠ 委托契约的唯一真源（2026-09-30 统一）。第三段仍是**归一化规则版本** ——
+  // 它不是为了凑段数，而是「规则改版后历史内容要能重跑」的幂等键。
+  return JobId.normalize(rawItemId, version);
 }
 
 /** BullMQ 对自定义 jobId 的段数要求（含 `:` 时必须恰好 3 段）。 */
-export const BULLMQ_JOBID_MIN_SEGMENTS = 3;
+export const BULLMQ_JOBID_MIN_SEGMENTS = BULLMQ_JOBID_SEGMENTS;
 
 /** 该 jobId 是否会被 BullMQ 接受。 */
+/** 段数判定（唯一实现在契约里）。 */
 export function isBullMqAcceptableJobId(jobId: string): boolean {
   if (!jobId.includes(':')) return true;
   return jobId.split(':').length === BULLMQ_JOBID_MIN_SEGMENTS;
@@ -142,11 +152,13 @@ export function assertContentQueueContract(): void {
 /**
  * 与契约 `JobId.aiScore` 的一致性自检（供测试断言用）。
  *
- * 记录一个事实：契约里 **4 个 builder 有 2 个不可用**
- *（`normalize` 与 `dailyDraft` 都是 2 段）。本模块只能绕开 normalize 那一个，
- * `dailyDraft` 归 Agent 08。
+ * ⚠ **2026-09-30 已修复**：契约的 builder 原先有 2/4 个产出 2 段
+ *（`normalize` 与 `dailyDraft`），照契约用等于「入队必炸」。
+ * 统一之后六个 builder 全部 3 段，本模块改为**委托** `JobId.normalize`。
+ *
+ * 这个函数保留下来只为一件事：让「契约又被改坏」这件事**立刻可见**
+ *（值从 `true` 变成 `false` 就是信号）。**不要再把它当成「契约是坏的」的证据。**
  */
-export function contractNormalizeJobIdIsBroken(): boolean {
-  return !isBullMqAcceptableJobId(JobId.normalize('1'));
+export function isContractNormalizeJobIdUsable(): boolean {
+  return isBullMqAcceptableJobId(JobId.normalize('1', 'v1'));
 }
-
