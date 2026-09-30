@@ -174,10 +174,11 @@ export function EvidencePanel({
     setOpen(next);
     if (!next || items !== null) return;
     try {
-      const body = await apiRequest<{ data: { evidence: PublicEvidence[] } }>(
+      // 泛型是**载荷**类型 —— 封套由 `apiRequest` 内部解开。
+      const body = await apiRequest<{ evidence: PublicEvidence[] }>(
         `/contents/${contentId}/evidence`,
       );
-      setItems(body.data.evidence);
+      setItems(body.evidence);
     } catch {
       setFailed(true);
     }

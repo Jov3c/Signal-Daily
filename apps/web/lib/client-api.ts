@@ -11,6 +11,28 @@
  * UI 要按**业务码**分支，不是按状态码。例如收藏失败时
  * `CONTENT_NOT_VISIBLE`（内容被撤下）要提示「这篇已经不可见了」，
  * 而 401 要提示登录 —— 两者可能都是 404 / 401，靠状态码分不出来。
+ *
+ * ── ⚠ 封套 `{data: …}` 的解包**只在这一个文件、这一个函数里做** ────
+ *
+ * 2026-09-30 的浏览器走查发现 `verifyEmailCode` 忘了读 `.data`，
+ * 后果不是「少显示一个字段」，而是**登录成功后整个页面崩**：
+ * 抽屉拿到封套当会话 → `session.user` 是 `undefined` → 顶栏读
+ * `user.displayName` → `TypeError`。
+ *
+ * **它躲过了全部 1932 个测试和类型检查。** 因为返回类型是**我们自己声明的**：
+ * 写成 `Promise<AuthSessionResponse>` 而实际返回 `{data: AuthSessionResponse}`，
+ * TypeScript 不会拆穿 —— 类型检查不会发现一个谎言，它只检查这个谎言自洽。
+ *
+ * 所以修法不是「补一条测试提醒大家别忘」，而是把解包**下沉进 `apiRequest`**，
+ * 让调用方**在结构上没有机会忘记**：
+ *
+ * ```text
+ * 改前  apiRequest<{data: T}>(path)  →  调用方自己 .data   ← 可以忘，忘了没人知道
+ * 改后  apiRequest<T>(path)          →  拿到的就是载荷     ← 忘不了
+ * ```
+ *
+ * 泛型参数的含义从「封套类型」变成「**载荷**类型」。这比加测试强：
+ * 测试只能证明「我测过的那几个没忘」，而这里证明的是「**任何人都忘不了**」。
  */
 
 import { API_PREFIX, type ApiErrorBody } from '@signal/contracts';
@@ -42,13 +64,43 @@ type RequestOptions = {
 };
 
 /**
- * 发一个请求并把结果解开封套。
+ * ⚠ **编译期守卫：载荷类型里不允许出现 `data` 键。**
+ *
+ * `apiRequest` 已经解开封套了（见文件头）。但如果调用方还按旧约定写
+ *
+ * ```ts
+ * const body = await apiRequest<{ data: PublishResult }>(path);  // ← 旧的写法
+ * const result = body.data;                                      // ← 永远是 undefined
+ * ```
+ *
+ * 那么 `body` 的真实类型是 `PublishResult` 而**不是** `{data: PublishResult}` ——
+ * 于是 `body.data` 是 `undefined`，**而类型检查不会报错**：泛型是调用方自己填的，
+ * TypeScript 只会老老实实相信它。这就是那个登录 bug 的**同一个形状**，只是方向相反。
+ *
+ * 这不是假设出来的风险：2026-09-30 改这一版时，代码里**已经潜伏着两处**
+ *（`admin-daily-actions.tsx` 的发布、`article-client.tsx` 的证据列表），
+ * 两处都在成功路径上读 `.data` —— 其中一处会让「发布成功」显示成「操作失败」。
+ * 一个错误形状能同时潜伏两处，就说明它会继续复发，靠人记是不行的。
+ *
+ * 所以直接在类型层面堵死：传进来的 `T` 若含 `data` 键 → 返回 `never` →
+ * 对它的**任何**读取都是编译错误。错误发生在 `pnpm typecheck`，而不是用户的浏览器里。
+ */
+type PayloadOnly<T> = 'data' extends keyof T ? never : T;
+
+/**
+ * 发一个请求，**并把 `{data: …}` 封套解开**。
+ *
+ * `T` 是**载荷**类型，不是封套类型 —— 见文件头。这个函数是这一层里
+ * 唯一允许看到封套的地方。
  *
  * `credentials: 'same-origin'` 是**显式**写的：默认值就是这样，
  * 但把它写出来是在强调「认证完全依赖同域 Cookie」——
  * 也是提醒后来者不要为了图省事改成 `include` 去跨域调。
  */
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<PayloadOnly<T>> {
   const url = new URL(
     `${API_PREFIX}${path.startsWith('/') ? path : `/${path}`}`,
     window.location.origin,
@@ -79,7 +131,32 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   // 204 之类的空响应：解 JSON 会抛，这里如实返回 undefined。
   const text = await response.text();
-  return (text === '' ? undefined : JSON.parse(text)) as T;
+  if (text === '') return undefined as PayloadOnly<T>;
+
+  const body: unknown = JSON.parse(text);
+
+  /**
+   * ⚠ **封套守卫：宁可炸，也不要静默 `undefined`。**
+   *
+   * 少了 `data` 键只有两种可能，两种都不该被当成「字段为空」混过去：
+   *   1. 我们连错了端点（或不存在的端点被某个中间层兜住了）；
+   *   2. 反向代理把一张 HTML 错误页当成 200 返回了（`JSON.parse` 那一步会先炸）。
+   *
+   * 之前的写法是直接 `.data`，于是「端点错了」和「这个字段就是 null」
+   * 在调用方看来一模一样 —— 而这正是那个登录 bug 能藏那么久的原因。
+   * 用 `in` 而不是 `!== undefined`：载荷**本身**是 `null` 时（`{data: null}`）
+   * 是合法的，不能误伤。
+   */
+  if (typeof body !== 'object' || body === null || !('data' in body)) {
+    throw new ApiClientError(
+      response.status,
+      'INTERNAL_ERROR',
+      'API 响应缺少 data 封套（端点或反向代理可能不对）',
+      body,
+    );
+  }
+
+  return (body as { data: PayloadOnly<T> }).data;
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,65 +184,55 @@ export type AuthSessionResponse = {
  *（那会让「这个邮箱没注册」变成一个可观测的差异），更不能写「该邮箱不存在」。
  */
 export async function requestEmailCode(email: string): Promise<RequestCodeResponse> {
-  // ⚠ **必须解封套。** API 一律返回 `{data: …}`（`docs/02`），
-  // 漏掉 `.data` 的话业务字段全是 `undefined` —— 而**类型检查不会报错**，
-  // 因为这个函数的返回类型是我们自己声明的（它撒了谎）。
-  const body = await apiRequest<{ data: RequestCodeResponse }>('/auth/email/request-code', {
+  return apiRequest<RequestCodeResponse>('/auth/email/request-code', {
     method: 'POST',
     body: { email },
   });
-  return body.data;
 }
 
 /** 用验证码换会话（服务端会 Set-Cookie：HttpOnly + SameSite=Lax）。 */
 export async function verifyEmailCode(email: string, code: string): Promise<AuthSessionResponse> {
-  // ⚠ 这里漏 `.data` 的后果**不是「少显示一个字段」，而是登录后整个页面崩**：
-  // 抽屉会拿到 `undefined` 当会话 → `session.user` 是 `undefined` →
-  // 顶栏读 `user.displayName` → `TypeError`。
-  // 而它躲过了全部测试与类型检查 —— 因为函数自己声明了返回类型，
-  // 而运行时返回的是封套。**只有浏览器里真的点一次才会发现。**
-  const body = await apiRequest<{ data: AuthSessionResponse }>('/auth/email/verify', {
+  return apiRequest<AuthSessionResponse>('/auth/email/verify', {
     method: 'POST',
     body: { email, code },
   });
-  return body.data;
 }
 
 /** 读当前登录用户。未登录时抛 `ApiClientError`（401）。 */
 export async function fetchMe(): Promise<MeDto> {
-  const body = await apiRequest<{ data: MeDto }>('/me');
-  return body.data;
+  return apiRequest<MeDto>('/me');
 }
 
 /** 登出。 */
 export async function logout(): Promise<void> {
-  // 返回值同样包在封套里（`envelope({ loggedOut: true })`）。这里不读它，
-  // 但类型要写对 —— 三个登录相关的调用里有两个就是因为类型写错而静默失效的。
-  await apiRequest<{ data: { loggedOut: true } }>('/auth/logout', { method: 'POST' });
+  // 载荷是 `{ loggedOut: true }`，这里不读它 —— 但**类型要写对**，
+  // 因为 `apiRequest` 的泛型现在就是载荷类型（写错会在编译期就露出来）。
+  await apiRequest<{ loggedOut: true }>('/auth/logout', { method: 'POST' });
 }
 
 /* ------------------------------------------------------------------ */
 /* 用户能力（收藏 / 阅读进度 / 偏好）                                   */
 /* ------------------------------------------------------------------ */
 
+/** `setBookmark` 的载荷。 */
+export type BookmarkState = {
+  contentId: string;
+  bookmarked: boolean;
+  createdAt: string | null;
+};
+
 /**
  * 加/取消收藏。**幂等**（`docs/11`）：重复加不会报错，状态由响应给出。
  */
-export async function setBookmark(
-  contentId: string,
-  bookmarked: boolean,
-): Promise<{ contentId: string; bookmarked: boolean; createdAt: string | null }> {
-  const body = await apiRequest<{
-    data: { contentId: string; bookmarked: boolean; createdAt: string | null };
-  }>(`/bookmarks/${contentId}`, { method: bookmarked ? 'POST' : 'DELETE' });
-  return body.data;
+export async function setBookmark(contentId: string, bookmarked: boolean): Promise<BookmarkState> {
+  return apiRequest<BookmarkState>(`/bookmarks/${contentId}`, {
+    method: bookmarked ? 'POST' : 'DELETE',
+  });
 }
 
 /** 上报阅读进度。`>= 0.95` 视为读完（`docs/11`）。 */
-export async function saveReadingProgress(
-  contentId: string,
-  progress: number,
-): Promise<void> {
+export async function saveReadingProgress(contentId: string, progress: number): Promise<void> {
+  // 服务端返回 `{contentId, progress, completed}`，这一层用不到它。
   await apiRequest<unknown>('/reading-progress', {
     method: 'PUT',
     body: { contentId, progress },
@@ -174,15 +241,13 @@ export async function saveReadingProgress(
 
 /** 读偏好（登录用户的服务端同步值）。 */
 export async function fetchPreferences(): Promise<UserPreferences> {
-  const body = await apiRequest<{ data: UserPreferences }>('/me/preferences');
-  return body.data;
+  return apiRequest<UserPreferences>('/me/preferences');
 }
 
 /** 写偏好（部分更新；只提交改动过的字段）。 */
 export async function savePreferences(patch: Partial<UserPreferences>): Promise<UserPreferences> {
-  const body = await apiRequest<{ data: UserPreferences }>('/me/preferences', {
+  return apiRequest<UserPreferences>('/me/preferences', {
     method: 'PUT',
     body: patch,
   });
-  return body.data;
 }

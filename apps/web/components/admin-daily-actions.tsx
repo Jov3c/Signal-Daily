@@ -77,16 +77,19 @@ export function EditionActions({
     setBusy(true);
     setIssues([]);
     try {
-      const body = await apiRequest<{ data: PublishResult }>(
-        `/admin/daily/${businessDate}/${action}`,
-        { method: 'POST' },
-      );
-      const result = body.data;
+      // ⚠ `apiRequest` 的泛型是**载荷**类型（它内部已经解了 `{data:…}` 封套）。
+      // 写成 `<{ data: PublishResult }>` 会拿到 `never` —— 由 `PayloadOnly` 在
+      // 编译期挡住，见 `lib/client-api.ts`。
+      const result = await apiRequest<PublishResult>(`/admin/daily/${businessDate}/${action}`, {
+        method: 'POST',
+      });
       // ⚠ 成功但带 issues —— 必须显示。吞掉它等于让「没发出去」看起来像成功。
       if (result.published === false) {
         setIssues(
           (result.issues ?? []).map((issue) =>
-            issue.code === undefined ? (issue.message ?? '未知问题') : `${issue.code}：${issue.message ?? ''}`,
+            issue.code === undefined
+              ? (issue.message ?? '未知问题')
+              : `${issue.code}：${issue.message ?? ''}`,
           ),
         );
         toast.show(`没有发布：${result.reason ?? 'preflight 未通过'}`);
@@ -95,9 +98,7 @@ export function EditionActions({
       }
       router.refresh();
     } catch (error) {
-      toast.show(
-        error instanceof ApiClientError ? `操作失败（${error.code}）` : '操作失败',
-      );
+      toast.show(error instanceof ApiClientError ? `操作失败（${error.code}）` : '操作失败');
     } finally {
       setBusy(false);
     }
