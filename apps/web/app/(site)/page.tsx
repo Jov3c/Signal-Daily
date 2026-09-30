@@ -39,6 +39,8 @@ const X_VOICE_COUNT = 3;
 /** 「值得关注」展示几条。原型是 3 条。 */
 const HIGHLIGHT_COUNT = 3;
 
+export const dynamic = 'force-dynamic';
+
 type TodayView = {
   businessDate: string;
   featured: PublicContent[];

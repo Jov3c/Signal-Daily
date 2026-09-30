@@ -200,6 +200,84 @@ describe('⚠ 验收 18 / 19：v1.7 删掉的订阅不许回来', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* ⚠ 路由不能有影子页 —— 一个真实踩到的 P0                              */
+/* ------------------------------------------------------------------ */
+
+describe('⚠ 每个地址只能有一个 page.tsx（Agent 00 的占位页曾经把首页整个吃掉）', () => {
+  /**
+   * 实测踩到的缺陷：Agent 00 留了一个占位 `app/page.tsx`（渲染
+   * 「Signal web shell」那样一句话），而 Agent 13 把真的首页放在
+   * `app/(site)/page.tsx`。**路由组 `(site)` 不产生路径段**，
+   * 于是两者都解析到 `/` —— Next **没有报错**，占位页赢了。
+   *
+   * 后果：
+   *
+   * ```text
+   * 首页永远是那张 122 字节的空壳，被预渲染成静态页（○）
+   * 「今日」从头到尾不可达
+   * 构建通过、22 条路由都在、30 项守卫全绿、curl / 返回 200
+   * ```
+   *
+   * 是**真的把服务起起来 curl 了一下**才发现的 —— 所以这条守卫
+   * 必须存在：它把「谁在服务这个地址」变成可断言的事实。
+   *
+   * 做法：把每个 `page.tsx` 的路径去掉路由组段（`(x)`）之后比对，
+   * 有重复就红。
+   */
+  it('没有任何两个 page.tsx 解析到同一个 URL', () => {
+    const routes = new Map<string, string[]>();
+
+    const walk = (dir: string, segments: string[]): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          // 路由组 `(site)` / `(marketing)` 不产生路径段。
+          const isGroup = entry.name.startsWith('(') && entry.name.endsWith(')');
+          walk(join(dir, entry.name), isGroup ? segments : [...segments, entry.name]);
+          continue;
+        }
+        if (entry.name !== 'page.tsx') continue;
+        // 根路由的 `segments` 是空的 → `/`（模板串永远不会是空串，所以
+        // 不能靠 `|| '/'` 兜底 —— lint 直接指出了这一点）。
+        const route = segments.length === 0 ? '/' : `/${segments.join('/')}`;
+        routes.set(route, [...(routes.get(route) ?? []), join(dir, entry.name)]);
+      }
+    };
+
+    walk(join(APP, 'app'), []);
+
+    const duplicated = [...routes.entries()]
+      .filter(([, files]) => files.length > 1)
+      .map(([route, files]) => `${route} ← ${files.join(' + ')}`);
+    expect(duplicated).toEqual([]);
+  });
+
+  it('扫到了全部页面（防止空跑）', () => {
+    let count = 0;
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name));
+        else if (entry.name === 'page.tsx') count += 1;
+      }
+    };
+    walk(join(APP, 'app'));
+    // 13 前台 + 9 后台 = 22
+    expect(count).toBeGreaterThanOrEqual(22);
+  });
+
+  it('⚠ `app/page.tsx` 不存在（Agent 00 的占位页已删除）', () => {
+    // 它曾经把真首页整个吃掉。删除它要提 CCR（Agent 00 的文件），
+    // 但留着它的代价是「首页不可达」。
+    expect(existsSync(join(APP, 'app/page.tsx'))).toBe(false);
+  });
+
+  it('两个 layout 都强制动态渲染（否则数据页会被冻进构建期快照）', () => {
+    for (const layout of ['app/(site)/layout.tsx', 'app/admin/layout.tsx']) {
+      expect(read(layout), layout).toContain("dynamic = 'force-dynamic'");
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* 主题与水合                                                           */
 /* ------------------------------------------------------------------ */
 
