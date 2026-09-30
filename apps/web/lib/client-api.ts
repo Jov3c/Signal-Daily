@@ -107,18 +107,28 @@ export type AuthSessionResponse = {
  *（那会让「这个邮箱没注册」变成一个可观测的差异），更不能写「该邮箱不存在」。
  */
 export async function requestEmailCode(email: string): Promise<RequestCodeResponse> {
-  return apiRequest<RequestCodeResponse>('/auth/email/request-code', {
+  // ⚠ **必须解封套。** API 一律返回 `{data: …}`（`docs/02`），
+  // 漏掉 `.data` 的话业务字段全是 `undefined` —— 而**类型检查不会报错**，
+  // 因为这个函数的返回类型是我们自己声明的（它撒了谎）。
+  const body = await apiRequest<{ data: RequestCodeResponse }>('/auth/email/request-code', {
     method: 'POST',
     body: { email },
   });
+  return body.data;
 }
 
 /** 用验证码换会话（服务端会 Set-Cookie：HttpOnly + SameSite=Lax）。 */
 export async function verifyEmailCode(email: string, code: string): Promise<AuthSessionResponse> {
-  return apiRequest<AuthSessionResponse>('/auth/email/verify', {
+  // ⚠ 这里漏 `.data` 的后果**不是「少显示一个字段」，而是登录后整个页面崩**：
+  // 抽屉会拿到 `undefined` 当会话 → `session.user` 是 `undefined` →
+  // 顶栏读 `user.displayName` → `TypeError`。
+  // 而它躲过了全部测试与类型检查 —— 因为函数自己声明了返回类型，
+  // 而运行时返回的是封套。**只有浏览器里真的点一次才会发现。**
+  const body = await apiRequest<{ data: AuthSessionResponse }>('/auth/email/verify', {
     method: 'POST',
     body: { email, code },
   });
+  return body.data;
 }
 
 /** 读当前登录用户。未登录时抛 `ApiClientError`（401）。 */
@@ -129,7 +139,9 @@ export async function fetchMe(): Promise<MeDto> {
 
 /** 登出。 */
 export async function logout(): Promise<void> {
-  await apiRequest<{ loggedOut: true }>('/auth/logout', { method: 'POST' });
+  // 返回值同样包在封套里（`envelope({ loggedOut: true })`）。这里不读它，
+  // 但类型要写对 —— 三个登录相关的调用里有两个就是因为类型写错而静默失效的。
+  await apiRequest<{ data: { loggedOut: true } }>('/auth/logout', { method: 'POST' });
 }
 
 /* ------------------------------------------------------------------ */

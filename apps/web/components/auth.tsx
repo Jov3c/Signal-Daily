@@ -26,6 +26,7 @@
  * 把「这个邮箱没注册」变成一个可观测的差异，把服务端刻意堵住的洞重新打开。
  */
 
+import { useRouter } from 'next/navigation';
 import {
   createContext,
   useCallback,
@@ -70,6 +71,21 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactElemen
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { hydrateFromPreferences } = useTheme();
+  /**
+   * ⚠ **登录/登出之后必须让当前路由重新取数。**
+   *
+   * 服务端组件是**带着当时的 Cookie** 渲染的（`lib/api.ts` 会转发它）。
+   * 登录发生在客户端，服务端那份渲染结果不会自己变 —— 于是出现
+   * 「点了登录、会话也真的建了，页面却还说『需要登录』」。
+   *
+   * 浏览器走查实测：`/admin/sources` 上登录成功后，h1 仍是「需要登录」，
+   * 表格 0 行，直到手动刷新。`/bookmarks` 同理（会一直显示「登录后才能使用收藏」）。
+   *
+   * `router.refresh()` 让服务端以**新 Cookie** 重渲染当前路由。
+   * 这正是「只有真的点一次才会发现」的那类缺陷 —— 会话确实建了（DB 里有行），
+   * 接口确实通了，只是页面没跟着变。
+   */
+  const router = useRouter();
 
   const loadPreferences = useCallback(async () => {
     // 登录用户的服务端偏好覆盖本地值（`docs/11` 的「阅读偏好同步」）。
@@ -105,7 +121,9 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactElemen
   const logout = useCallback(async () => {
     await logoutRequest().catch(() => undefined);
     setUser(null);
-  }, []);
+    // 同上：登出也要重渲染，否则当前页还留着「已登录」时的服务端结果。
+    router.refresh();
+  }, [router]);
 
   const openLogin = useCallback(() => setDrawerOpen(true), []);
 
@@ -124,6 +142,8 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactElemen
           setUser(me);
           setDrawerOpen(false);
           await loadPreferences();
+          // ⚠ 顺序：先落状态再刷新路由（刷新会重渲染服务端组件）。
+          router.refresh();
         }}
       />
     </AuthContext.Provider>
