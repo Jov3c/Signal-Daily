@@ -40,6 +40,13 @@ Thumbs.db
 # infra runtime
 infra/data/
 
+# ⚠ 项目约定「临时文件放 work/」（见 README 与 .dockerignore），但这份 .gitignore
+# 里**一直没有它** —— 2026-10-01 实测：`work/cookies.txt` 被 `git add -A` 提交了。
+# 那一次是虚惊（里面只有 curl 的 3 行注释头，没有真 cookie，因为登录当时失败了），
+# 但这个目录**按约定就会放**临时脚本、日志、cookie jar、数据库备份这类东西 ——
+# 迟早会有真的进去。补上。
+work/
+
 # ⚠⚠ TLS 私钥**绝不入库**。2026-10-01 实测发现：这一条原先**不存在**，
 # 而 `.dockerignore` 里早就有 `infra/nginx/certs` —— 也就是说做镜像时想到了，
 # 入库时漏了。按 `infra/nginx/README.md` 的步骤生成自签证书之后，
