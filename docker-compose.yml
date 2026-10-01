@@ -77,6 +77,21 @@ services:
       - --binlog-expire-logs-seconds=604800
       - --binlog-format=ROW
       - --server-id=1
+      # ⚠ 时区**必须在命令行里也写一遍** —— 2026-10-01 实测。
+      #
+      # `infra/mysql/my.cnf` 里写着 `default-time-zone = '+00:00'`，但那份文件
+      # 被 MySQL **静默忽略**（它先打一条 Warning 就继续启动）：
+      #   [Warning] World-writable config file '/etc/mysql/conf.d/signal.cnf' is ignored
+      # （Docker Desktop on Windows 的挂载权限所致；真正的 Linux 主机上多半不会。）
+      #
+      # 实测生效值：`@@global.time_zone = SYSTEM`，而 compose 给这个容器设了
+      # `TZ: Asia/Shanghai` → **NOW() 比应用写入的 UTC 值快 8 小时**。
+      # 这正是 `my.cnf` 注释里记着的那个事故：
+      #   「Agent 03 记录过本机 time_zone=SYSTEM=Asia/Shanghai 造成的静默事故」
+      #
+      # 上面那几条 binlog 参数之所以一直正常，是因为它们**在命令行里也写了一份**
+      # —— 被忽略的 cnf 那份不是唯一来源。时区这一条当时漏了。
+      - --default-time-zone=+00:00
     env_file: *env-file
     environment:
       MYSQL_DATABASE: signal
@@ -167,8 +182,27 @@ services:
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
-    # worker **不需要** edge：它不出网给用户（出网只去外部 API）
-    networks: [internal]
+    # ⚠ **必须也在 `edge` 上** —— 2026-10-01 修。
+    #
+    # 这里原本写的是「worker **不需要** edge：它不出网给用户（出网只去外部 API）」，
+    # 并只挂 `internal`。那行注释把两件事混为一谈了：
+    #
+    # ```text
+    # 「不接收用户的入站流量」 ≠ 「不需要出站」
+    # ```
+    #
+    # 而 `internal: true` 掐断的**恰恰是出站**（它让这个网络没有任何对外路由）。
+    # 于是 worker —— **全栈唯一必须访问互联网的组件**（它负责抓 RSS / X）——
+    # 被放在了一个连 DNS 都出不去的网络上。实测：
+    #   SOURCE_FETCH_FAILED: RSS source openai-blog: Source host could not be resolved
+    #                        (DNS_RESOLUTION_FAILED)
+    #   容器内 EAI_AGAIN
+    # 即：**采集在部署形态下根本不可能工作** —— 而采集是这个产品的核心动作。
+    #
+    # 同一个文件里 `api` 早就同时挂在 `edge, internal` 上（它也要出网去
+    # 外部 AI / X / GitHub），worker 漏了。加 `edge` 不引入任何入站暴露：
+    # worker 不 `ports:`、不监听端口（见下面的 healthcheck 注释）。
+    networks: [edge, internal]
     env_file: *env-file
     environment:
       NODE_ENV: production
