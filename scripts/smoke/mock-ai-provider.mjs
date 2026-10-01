@@ -89,7 +89,7 @@ function detectTask(body) {
   return text.includes('translatedText') ? 'TRANSLATE' : 'SCORE';
 }
 
-function buildContent(task, body) {
+function buildContent(task) {
   if (task === 'TRANSLATE') {
     // 形状必须与 `translateOutputSchema`（.strict()）逐字一致。
     return JSON.stringify({
@@ -145,7 +145,7 @@ const server = createServer(async (req, res) => {
     req.method === 'POST' &&
     (url.pathname === '/chat/completions' || url.pathname.endsWith('/chat/completions'))
   ) {
-    let body = {};
+    let body;
     try {
       body = JSON.parse((await readBody(req)) || '{}');
     } catch {

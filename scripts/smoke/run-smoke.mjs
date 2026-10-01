@@ -308,7 +308,7 @@ class Session {
     }
 
     const text = await response.text();
-    let json = null;
+    let json;
     try {
       json = text === '' ? null : JSON.parse(text);
     } catch {
@@ -431,7 +431,7 @@ async function wipeDatabase(prisma) {
     try {
       await prisma.$executeRawUnsafe(`DELETE FROM \`${table}\``);
     } catch (error) {
-      throw new Error(`清空表 ${table} 失败：${error.message}`);
+      throw new Error(`清空表 ${table} 失败：${error.message}`, { cause: error });
     }
   }
 }
@@ -526,7 +526,6 @@ async function main() {
     AI_MODEL_STRONG: 'smoke-strong',
   };
 
-  let mock;
   let api;
   let worker;
 
@@ -566,7 +565,7 @@ async function main() {
         );
       }
 
-      mock = startChild('mock-ai', process.execPath, ['scripts/smoke/mock-ai-provider.mjs'], {
+      startChild('mock-ai', process.execPath, ['scripts/smoke/mock-ai-provider.mjs'], {
         SMOKE_MOCK_PORT: String(MOCK_PORT),
         SMOKE_AI_MARKER: MARKER,
       });
@@ -608,10 +607,8 @@ async function main() {
 
     /* ---- 3. Admin 登录 ---- */
     const adminSession = new Session(API_BASE);
-    let adminUser;
     await step('Admin 登录（真实 Email OTP，验证码取自 api stderr）', async () => {
       const { me } = await login(adminSession, ADMIN_EMAIL, 'Admin');
-      adminUser = me;
       assert(me?.role === 'ADMIN', `期望 ADMIN，实际 role=${me?.role}`);
       return `role=${me.role} id=${me.id}`;
     });
