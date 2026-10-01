@@ -54,13 +54,9 @@ function topLevelFields(rawSource: string, typeName: string): string[] {
   //   2. **带文档注释的字段会被漏掉** —— 字段名前面隔着一段 `/** … */` 时，
   //      下面那条 `^\s*(\w+)\s*:` 的正则匹配不上（第一版就是这么漏了
   //      `MeDto.id` / `AdminJobRun.durationMs`，而它们恰好都带注释）。
-  const source = rawSource
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/[^\n]*/g, '');
+  const source = rawSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
-  const pattern = new RegExp(
-    String.raw`(?:export\s+)?type\s+${typeName}\s*=\s*\{`,
-  );
+  const pattern = new RegExp(String.raw`(?:export\s+)?type\s+${typeName}\s*=\s*\{`);
   const match = pattern.exec(source);
   if (match === null) return [];
 
@@ -140,12 +136,22 @@ describe('⚠ 镜像类型必须与后端真源对得上（改名就会红）', 
     expect(web.sort()).toEqual([...apiKeys].sort());
   });
 
-  it('`FeaturedRow` ← Agent 08 的 featured/repository.ts', () => {
+  /**
+   * ⚠ 真源是 **`public-view.ts` 的 `PublicFeatured`**，不是仓储的 `FeaturedRow` ——
+   * 2026-10-01 改。前端镜像的是**公开响应**的形状，而 `GET /featured` 现在会过
+   * `toPublicFeatured()` 那层投影（在那之前它是原样返回仓储行的）。
+   *
+   * 拿仓储类型当基线会让这条守卫**盯着错误的东西**：仓储可以有前台永远看不到的
+   * 内部字段（`pipelineStatus` 等），而那些字段一旦进了公开响应就是泄漏 ——
+   * 这条守卫本该在那时候红，盯着仓储却不会。
+   * 与下面日报那条（`PublicDailyEdition ← daily/public-view.ts`）同一口径。
+   */
+  it('`FeaturedRow`（前端） ← featured/public-view.ts 的 `PublicFeatured`', () => {
     expectFieldsExist(
       WEB_TYPES,
       'FeaturedRow',
-      readRepo('apps/api/src/modules/featured/repository.ts'),
-      'FeaturedRow',
+      readRepo('apps/api/src/modules/featured/public-view.ts'),
+      'PublicFeatured',
     );
   });
 
@@ -167,7 +173,14 @@ describe('⚠ 镜像类型必须与后端真源对得上（改名就会红）', 
     // 返回字面量比对是做不到的；这里退一步，断言 service 里确实拼出了
     // 那几块（少了任何一块都意味着 docs/09 的清单不再完整）。
     const api = readRepo('apps/api/src/modules/admin-review/review.service.ts');
-    for (const block of ['content:', 'source:', 'aiScore:', 'event:', 'similarContents:', 'review:']) {
+    for (const block of [
+      'content:',
+      'source:',
+      'aiScore:',
+      'event:',
+      'similarContents:',
+      'review:',
+    ]) {
       expect(api, `review.service.ts 里缺少 ${block}`).toContain(block);
     }
     const web = topLevelFields(WEB_ADMIN, 'ReviewDetail');
@@ -235,7 +248,8 @@ describe('守卫本身有效（防止空跑）', () => {
   it('解析函数在真实源码上确实取到了字段', () => {
     expect(topLevelFields(WEB_TYPES, 'MeDto').length).toBeGreaterThan(4);
     expect(
-      topLevelFields(readRepo('apps/api/src/modules/admin-ops/repository.ts'), 'AdminJobRun').length,
+      topLevelFields(readRepo('apps/api/src/modules/admin-ops/repository.ts'), 'AdminJobRun')
+        .length,
     ).toBeGreaterThan(5);
   });
 

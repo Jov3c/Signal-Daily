@@ -35,6 +35,7 @@ import { invalid } from '../../common/validation';
 import { AdminOriginGuard } from '../admin-review/admin-origin.guard';
 import { FeaturedService } from './service';
 import { parseCreateFeaturedBody, parseFeaturedListQuery, parseUpdateFeaturedBody } from './dto';
+import { toPublicFeatured } from './public-view';
 
 /** Admin 管理面。 */
 @UseGuards(AdminOriginGuard, AdminGuard)
@@ -92,6 +93,9 @@ export class PublicFeaturedController {
   async list(@Query() query: Record<string, unknown>): Promise<unknown> {
     const parsed = parseFeaturedListQuery(query, invalid);
     const result = await this.service.list({ ...parsed, publicOnly: true });
-    return cursorEnvelope(result.rows, result.nextCursor);
+    // ⚠ **必须过投影层**：仓储的 `FeaturedRow` 带着 `pipelineStatus` /
+    // `reviewStatus` / `publishFeatured` 三个编辑台内部字段，直接返回等于
+    // 让任何人一条 curl 就看到内容的内部审核状态。理由详见 `public-view.ts`。
+    return cursorEnvelope(result.rows.map(toPublicFeatured), result.nextCursor);
   }
 }

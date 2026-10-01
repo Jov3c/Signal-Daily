@@ -94,11 +94,14 @@ export type UserPreferences = {
  * ⚠ **只声明前台真正要读的字段，而且刻意不声明 `content.pipelineStatus` /
  * `content.reviewStatus` / `content.publishFeatured`。**
  *
- * 那三个是编辑台的内部状态，而 `/featured` 目前是**原样返回仓储的行**——
- * 也就是说它们**确实出现在公开响应里**。前台不去读它们（`docs/14`：
- * 不把后台 debug 信息搬给用户），但这不改变「它们能被 curl 到」的事实。
- * 已作为独立问题记入 `CONTRACT_CHANGE_REQUEST-agent-13.md` 第 2 项：
- * 日报有 `public-view.ts` 那层投影，精选没有。
+ * 那三个是编辑台的内部状态。**2026-10-01 起后端会过投影层，它们不再出现在
+ * 公开响应里** —— 真源是 `apps/api/src/modules/featured/public-view.ts` 的
+ * `PublicFeatured`，而这份镜像就是对着它写的（`contract-parity.spec.ts`
+ * 也比的是那一份）。
+ *
+ * 在这之前 `/featured` 是**原样返回仓储的行**的，那三个字段确实能被 curl 到 ——
+ * 当时把这件事记进了 `CONTRACT_CHANGE_REQUEST-agent-13.md` 第 2 项
+ *（「日报有 `public-view.ts` 那层投影，精选没有」），现已补上。
  */
 export type FeaturedRow = {
   contentId: string;
