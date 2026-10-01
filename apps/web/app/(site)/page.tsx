@@ -29,6 +29,7 @@ import { serverFetch, type Single } from '../../lib/api';
 import {
   businessDateWeekday,
   formatBusinessDate,
+  htmlToPlainText,
   longBusinessDate,
   shortRelative,
 } from '../../lib/format';
@@ -63,9 +64,7 @@ export default async function TodayPage(): Promise<ReactElement> {
   // 都没有就是真的没有内容（空库 / 采集还没跑），下面给空态。
   const headline = featured[0] ?? latest[0] ?? null;
   // 「值得关注」= 去掉头条之后的前三条（头条已经在 hero 里了，再列一遍是重复）。
-  const highlights = featured
-    .filter((item) => item.id !== headline?.id)
-    .slice(0, HIGHLIGHT_COUNT);
+  const highlights = featured.filter((item) => item.id !== headline?.id).slice(0, HIGHLIGHT_COUNT);
   const rest = latest.filter((item) => item.id !== headline?.id);
   const xVoice = x.data.slice(0, X_VOICE_COUNT);
 
@@ -81,10 +80,7 @@ export default async function TodayPage(): Promise<ReactElement> {
       />
 
       {headline === null ? (
-        <EmptyState
-          title="今天还没有内容"
-          hint="采集与审核还在跑。可以先看看历史日报。"
-        />
+        <EmptyState title="今天还没有内容" hint="采集与审核还在跑。可以先看看历史日报。" />
       ) : (
         <Hero
           content={headline}
@@ -134,7 +130,12 @@ export default async function TodayPage(): Promise<ReactElement> {
                 <MiniCard
                   key={item.id}
                   meta={`${handle === undefined || handle === null ? item.source.name : `@${handle}`} · ${shortRelative(new Date(item.publishedAt ?? now), now)}`}
-                  title={item.bodyOriginal ?? item.title}
+                  // ⚠ 卡片标题必须是**纯文本**：`MiniCard` 把它渲染进 `<h3>{title}</h3>`，
+                  // 直接把 `bodyOriginal` 传进去的话，两件事会同时出错 ——
+                  // 标签被原样显示成文字，而且块级元素落在标题里在语义上就是错的。
+                  // `bodyOriginal` 是清洗过的 **HTML**（契约见 `ArticleBody` 的注释），
+                  // 所以这里先转纯文本；转空了（例如整条只有图片）再退回 `title`。
+                  title={htmlToPlainText(item.bodyOriginal) || item.title}
                   href={item.originalUrl}
                   external
                 />

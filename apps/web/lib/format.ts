@@ -118,8 +118,51 @@ export function shortRelative(instant: Date, now: Date): string {
  */
 export function readingMinutes(text: string | null | undefined): number {
   if (text === null || text === undefined) return 1;
-  const length = text.trim().length;
+  // ⚠ 先转成纯文本再数字符：调用方传进来的可能是 **HTML**（`bodyOriginal`）。
+  // 直接 `.length` 会把标签也算进去，带 HTML 的正文阅读时长会明显偏高。
+  const length = htmlToPlainText(text).length;
   return Math.max(1, Math.round(length / 350));
+}
+
+/**
+ * 安全 HTML → **纯文本**。⚠ **只用于展示语义，不是安全边界。**
+ *
+ * ── 为什么需要它 ────────────────────────────────────────────────────
+ * `bodyOriginal` 是清洗过的 **HTML**（契约见 `ArticleBody` 的注释），
+ * 但有三个地方要的是**纯文本**，而它们此前都直接把 HTML 当文本用了：
+ *
+ * ```text
+ * 卡片标题   <h3>{title}</h3>    标题里不该出现块级元素，标签会原样显示成文字
+ * 阅读时长   按字符数估          标签被计入 → 时长偏高
+ * X 卡片标题 同第一行
+ * ```
+ *
+ * 这三处**都不是安全边界** —— 真正把内容当 HTML 渲染的只有 `ArticleBody`，
+ * 而它的输入已经过 worker 的白名单清洗（`content/html/policy.ts`）。
+ * 本函数做的是**显示语义**的转换，不承担、也不该承担安全职责。
+ *
+ * ── 为什么可以用正则处理 HTML ───────────────────────────────────────
+ * 用正则解析 HTML 通常是坏主意，这里的两个前提使它成立：
+ * 输入是 `sanitize-html` 的产物（标签结构规整、没有畸形标记），
+ * 且本函数**不产出 HTML** —— 结果是纯文本，最终交给 React 转义。
+ * 换句话说：这里的误判只会让文案多一点少一点，不会变成注入口。
+ *
+ * 实体解码**顺序要紧**：`&amp;` 必须放最后。先解它的话，
+ * `&amp;lt;` 会先变成 `&lt;`、再被下一步解成 `<` —— 一次解码变成两次。
+ */
+export function htmlToPlainText(html: string | null | undefined): string {
+  if (html === null || html === undefined) return '';
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** `8 min read`。 */

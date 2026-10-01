@@ -89,7 +89,10 @@ export default async function AdminReviewDetailPage({
             <dl className="kv">
               <dt>来源</dt>
               <dd>
-                {source.name} <span className="subtle">({source.type} · {source.kind})</span>
+                {source.name}{' '}
+                <span className="subtle">
+                  ({source.type} · {source.kind})
+                </span>
               </dd>
               <dt>原文链接</dt>
               <dd>
@@ -156,7 +159,23 @@ export default async function AdminReviewDetailPage({
             {content.bodyOriginal === null ? (
               <p className="subtle">没有正文（可能是只有摘要的条目）。</p>
             ) : (
-              <p style={{ whiteSpace: 'pre-wrap' }}>{content.bodyOriginal.slice(0, 2000)}</p>
+              /*
+               * ⚠ 按 **HTML** 渲染，与前台 `ArticleBody` 一致 —— 编辑要判断的是
+               * 「读者看到的这一版」是否可用，而不是看源码。用纯文本渲染时
+               * 满屏是标签，判断不了排版，也看不出链接指向哪里。
+               *
+               * 安全上与前台同一条边界：`bodyOriginal` 是清洗过的 HTML
+               * （唯一写入点 `normalize.ts → sanitizeArticleHtml`）。
+               *
+               * ⚠ `slice` 可能把标签**从中间截断**，于是这里渲染出的是不完整的
+               * 标记。这是**有意的**：截断只为预览、减少后台页面的体积，被截断的
+               * 部分由解析器丢弃。真正要读全文时到前台看。
+               */
+              <div
+                className="article-text"
+                style={{ whiteSpace: 'pre-wrap' }}
+                dangerouslySetInnerHTML={{ __html: content.bodyOriginal.slice(0, 2000) }}
+              />
             )}
           </section>
 

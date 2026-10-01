@@ -62,12 +62,23 @@ export function XPost({
         </div>
       </div>
       <div className="x-body">
-        <div className="x-text">{content.bodyOriginal ?? content.summary ?? ''}</div>
+        {/*
+          ⚠ X 动态正文与文章正文是**同一条契约**：`bodyOriginal` 是清洗过的
+          **HTML**（唯一写入点 `normalize.ts → sanitizeArticleHtml`，策略在
+          `apps/worker/src/jobs/content/html/policy.ts`）。所以这里按 HTML 渲染，
+          理由与信任边界见 `article-client.tsx` 里 `ArticleBody` 的注释 —— 那里
+          写全了，这里不重复。
+
+          之前这里按纯文本渲染，带 HTML 的 X 正文会把标签原样显示成文字。
+          当前扫到的 X 源还没产出 HTML，所以同样是隐性的。
+        */}
+        <div
+          className="x-text"
+          dangerouslySetInnerHTML={{ __html: content.bodyOriginal ?? content.summary ?? '' }}
+        />
 
         {translated === null ? null : (
-          <div className={showTranslation ? 'translation' : 'translation hidden'}>
-            {translated}
-          </div>
+          <div className={showTranslation ? 'translation' : 'translation hidden'}>{translated}</div>
         )}
 
         <div className="x-actions">
