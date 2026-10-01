@@ -8,7 +8,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * 数据库集成测试 —— **需要真实 MySQL 8**。
  *
  * 运行：pnpm test:db
- * 前置：pnpm db:migrate（建表）
+ * 前置：`pnpm db:migrate`（建表）**和** `pnpm build`。
+ *
+ * ⚠ **`pnpm build` 是 2026-10-02 补进这一行的**，原先只写了 migrate。
+ * 「Seed 幂等」那一节会自己执行 seed —— `execFileSync(node, ['prisma/dist/seed.js'])` ——
+ * 也就是说它要的是**构建产物**。本地永远不会发现这件事（开发机上那个文件早就在了），
+ * 而第一次把它放进 CI 时挂了：报的不是「文件不存在」，而是 seed 没跑成之后
+ * `findFirstOrThrow` 找不到 `ai-models` / `x-karpathy` 两个 seed 才有的 slug。
+ * 一句写漏的前提，代价是一轮 CI 加一次误判（我第一反应以为缺的是 `pnpm db:seed`）。
  *
  * 这些用例不静默跳过：连不上库就直接失败，避免「看着是绿的其实没验」。
  * 对应 tasks/agent-01-database.md 的「测试」一节。

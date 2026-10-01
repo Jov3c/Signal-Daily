@@ -134,6 +134,18 @@ jobs:
       # ⚠ migration 必须在测试之前：测试假设 schema 已是迁移后的形状。
       - run: pnpm db:migrate
 
+      # ⚠ **`pnpm build` 不能省** —— 2026-10-02 实测：第一版 CI 只跑到这里就挂了。
+      #
+      # `prisma/__tests__/database.integration.spec.ts` 的「Seed 幂等」一节会
+      # **自己执行** seed（`execFileSync(node, ['prisma/dist/seed.js'])`），
+      # 并且有一条用例就叫「seed 产物存在（**需先 `pnpm build`**）」。
+      # 也就是说它要的是**构建产物**，不是 `pnpm db:seed`（那样只跑不建）。
+      #
+      # 本地不会发现：开发机上 `prisma/dist/seed.js` 早就在（`pnpm build` 过一次
+      # 就有了），而 CI 是干净的。失败形态也很绕 —— 报的不是「文件不存在」，
+      # 而是 seed 没跑成之后 `findFirstOrThrow` 找不到 `ai-models` / `x-karpathy`。
+      - run: pnpm build
+
       # ⚠ 三步**串行**（共用同一个库）。不要合并成一条并发命令。
       - run: pnpm test:db
       - run: pnpm --filter @signal/api test:integration
