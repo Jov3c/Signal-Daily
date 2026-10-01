@@ -114,9 +114,20 @@ export function ArticleBody({
       </div>
 
       <div className="article-body" ref={bodyRef}>
-        <div className="article-text" hidden={showTranslation}>
-          {paragraphs(original)}
-        </div>
+        {/*
+          ⚠ 原文与译文的渲染方式**刻意不同**：原文走 `dangerouslySetInnerHTML`，
+          译文走 React 文本。两条列的生产契约不一样，展开说明见下面
+          `paragraphs()` 的文档注释。
+
+          这里保持 `.article-text` 这个容器与 `hidden` 的用法不变 ——
+          `bodyRef` 上的阅读进度计算依赖 `.article-body` / `.article-text` 的
+          几何，改 DOM 结构会让「读到哪里」静默算错。
+        */}
+        <div
+          className="article-text"
+          hidden={showTranslation}
+          dangerouslySetInnerHTML={{ __html: original }}
+        />
         {translated === null ? null : (
           <div className="article-text" hidden={!showTranslation}>
             {paragraphs(translated)}
@@ -128,11 +139,37 @@ export function ArticleBody({
 }
 
 /**
- * 纯文本 → 段落。
+ * 纯文本 → 段落。**只用于 `bodyTranslated`。**
  *
- * 后端存的是**纯文本**（没有 HTML），所以不能 `dangerouslySetInnerHTML`
- * （那会把正文里的 `<script>` 变成真的脚本）。这里按空行切段并交给
- * React 转义 —— 用户/采集来的内容永远不进入 `innerHTML`。
+ * ── 两条正文列的生产契约不同，渲染方式必须跟着不同 ──────────────────
+ *
+ * ```text
+ * bodyOriginal   后端清洗过的**安全 HTML**
+ *                唯一写入点：worker normalize.ts → sanitizeArticleHtml()
+ *                策略在 apps/worker/src/jobs/content/html/policy.ts
+ *                （ALLOWED_TAGS / ALLOWED_ATTRIBUTES / ALLOWED_SCHEMES /
+ *                 LINK_HARDENING：外链强制 rel="noopener noreferrer"）
+ * bodyTranslated AI 生成的**纯文本**（translate 任务只写 body_translated 列）
+ * ```
+ *
+ * 所以**原文**用 `dangerouslySetInnerHTML` 渲染 —— 它本来就是 HTML，
+ * 段落 / 引用 / 链接都该变成真正的元素；按空行切段反而会把标签切成可见文字。
+ * **译文**必须交给 React 转义：它是模型输出，里面出现 `<script>` / `<img onerror>`
+ * 这类字符只是碰巧长得像标记，一旦丢进 `innerHTML` 就会被浏览器当成标记解析。
+ *
+ * ⚠ 之前这里把两条列都当成纯文本渲染，注释还写反了（声称后端只存纯文本）——
+ *   结果就是带 HTML 的正文把 `<p>` 原样显示成可见文字。当前采集到的源恰好只给
+ *   纯文本，所以还没人报；但白名单是真实存在的，网页 / X 这类源会产出 HTML。
+ *
+ * ── 为什么不在 web 侧再清洗一遍 ──────────────────────────────────────
+ * 那会把清洗策略复制成第二份（worker 的 `policy.ts` 一份、web 一份），两份迟早
+ * 漂移，而漂移的方向通常是「web 那份变松」。这里的信任边界是清晰的：`bodyOriginal`
+ * 在生产里**有且只有一个**写入点，且它已经过白名单清洗。真要收紧策略，应当改
+ * `policy.ts` 并重跑清洗，而不是在渲染层加第二道 —— 渲染层看不到完整的策略
+ *（哪些标签、哪些 scheme、哪些 style 被允许），策略拆成两处只会让两边都难维护。
+ *
+ * ── 本函数按空行切段，**只对纯文本成立** ─────────────────────────────
+ * 原文是 HTML，不能走这里：按空行切会把 HTML 标签切成碎片。
  */
 function paragraphs(text: string): ReactElement[] {
   return text

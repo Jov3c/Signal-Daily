@@ -161,6 +161,33 @@ A 类守卫仍绿（它独立于这条链路）。
 再和所有源码比，只改 web 时**误报**了。改成「按目标分别比对」后正常 ——
 误报本身说明「源码」与「产物」是两张各有各的对应关系的表。
 
+## 文章正文渲染（`article-html.spec.ts`）
+
+守卫清单 P1-02：`bodyOriginal` 是**清洗过的安全 HTML**，`bodyTranslated` 是**纯文本**，
+两者渲染方式必须不同（前者 `dangerouslySetInnerHTML`、后者 React 文本）。
+字符串层守卫在 `apps/web/test/article-body-contract.spec.ts`；这里证明**浏览器里的实际行为**：
+
+```text
+<p> / <blockquote>      渲染成真正的元素（不是可见的 "<p>" 文字）
+白名单内 <a>            可点击，且带 rel="noopener noreferrer"（后端 LINK_HARDENING）
+<script>                不入 DOM、也不执行（读哨兵 window.__e2eScript）
+onclick                 属性被剥掉，且**真的点一下**也不触发
+javascript: URL         href 被剥掉，点击不执行、不跳转
+bodyTranslated          仍走 React 文本（<b> 保持为字面文字），脚本不执行
+```
+
+**造数据的方式**：用例把一段未清洗的富文本 + 攻击载荷交给 **worker 真实的
+`sanitizeArticleHtml`**（就是 `normalize.ts:136` 调用的那个函数），把输出写进
+`body_original` —— 于是库里的形状与线上真实入库一致。不手写「看起来干净」的 HTML，
+是为了让「清洗策略被改松」（例如有人在白名单里加上 `onclick`）能当场让本用例变红，
+而不是被测试自己复制的那份策略掩盖。
+
+**可重复运行**：固定来源 slug（`e2e-article-html-guard`）+ 每次运行**先删后插**，
+`afterAll` 再清掉来源与内容。跑完库里不留数据。
+
+**「有牙齿」验证（实际做过）**：把 `article-client.tsx` 改回 `{paragraphs(original)}`
+→ 重建 web → 本用例**变红**（报错里能看到 `<p>` 成了可见文字）；恢复后 3 passed。
+
 ## 已知限制
 
 - **必须先构建，harness 不替你构建。** 构建是分钟级的，用例是秒级的；
@@ -176,7 +203,7 @@ A 类守卫仍绿（它独立于这条链路）。
   所以「api 在 3001、web 在 3000」是**烤进构建产物**的事实。
   让端口可配会产生一种极具迷惑性的失败：网页正常、只有 `/api/*` 静默 502。
 - **`retries: 0`**（有意为之）。重试会把「偶发」洗成「通过」，而这条用例的全部价值就是它的红。
-- **只覆盖登录链路**：收藏 / 阅读进度 / 偏好同步的写路径没有覆盖。
+- **只覆盖登录链路 + 文章正文渲染**：收藏 / 阅读进度 / 偏好同步的写路径没有覆盖。
   将来加用例时注意两件事：默认 `workers: 1`（只有一套服务与 Redis），
   以及新用例应当复用 `helpers.ts` 的 `WEB_BASE_URL` / `readOtpCode` / `uniqueEmail`，
   不要复制字面量。
@@ -186,11 +213,12 @@ A 类守卫仍绿（它独立于这条链路）。
 
 ## 文件
 
-| 文件                     | 作用                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `playwright.config.ts`   | 根配置：`testDir` 指 `e2e/`，串起 setup/teardown，`workers: 1`、`retries: 0`          |
-| `e2e/global-setup.ts`    | 安全护栏 → 收上一轮尸体 → 构建新鲜度 → 清限流键 → 起 api/web → 等就绪 → 写台账        |
-| `e2e/global-teardown.ts` | 按台账 `taskkill /T /F` 杀掉进程树，删台账                                            |
-| `e2e/helpers.ts`         | 共享工具：`.env` 装载、安全护栏、Redis 清键、进程树、就绪探测、验证码解析、构建新鲜度 |
-| `e2e/login.spec.ts`      | A 类显式守卫 + 登录链路主用例                                                         |
-| `e2e/.artifacts/`        | 运行时产物（已 gitignore）：api/web 日志、台账、trace、截图、HTML 报告                |
+| 文件                       | 作用                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------- |
+| `playwright.config.ts`     | 根配置：`testDir` 指 `e2e/`，串起 setup/teardown，`workers: 1`、`retries: 0`          |
+| `e2e/global-setup.ts`      | 安全护栏 → 收上一轮尸体 → 构建新鲜度 → 清限流键 → 起 api/web → 等就绪 → 写台账        |
+| `e2e/global-teardown.ts`   | 按台账 `taskkill /T /F` 杀掉进程树，删台账                                            |
+| `e2e/helpers.ts`           | 共享工具：`.env` 装载、安全护栏、Redis 清键、进程树、就绪探测、验证码解析、构建新鲜度 |
+| `e2e/login.spec.ts`        | A 类显式守卫 + 登录链路主用例                                                         |
+| `e2e/article-html.spec.ts` | 文章正文渲染守卫（P1-02）：原文按安全 HTML、译文按纯文本，恶意载荷不执行              |
+| `e2e/.artifacts/`          | 运行时产物（已 gitignore）：api/web 日志、台账、trace、截图、HTML 报告                |
