@@ -499,9 +499,30 @@ if (deploy !== null) {
   // `password: ${{ secrets.X }}` 是**正确**写法；要抓的是硬编码的值。
   // 第一版写成 `!/password:\s*\S+/` —— 把 secrets 引用也判成了违规。
   check('deploy: 用了 secrets 上下文', /secrets\./.test(deploy));
+
+  /**
+   * ⚠ **只扫 `deploy` 这个 job，不扫整个文件** —— 2026-10-02 收窄。
+   *
+   * 原来扫全文，于是加 `integration` job（真实 MySQL + Redis 的 service container）
+   * 时当场误报：那一节里有
+   *
+   * ```yaml
+   *   MYSQL_ROOT_PASSWORD: root
+   *   MYSQL_PASSWORD: signal
+   * ```
+   *
+   * 而那是**CI 服务容器的临时凭据** —— 只存在于 runner 内部一个用完即弃的
+   * MySQL 上，硬编码是标准做法，也从来不会离开这个 job。
+   *
+   * 收窄**不损失覆盖**：生产凭据（`VPS_HOST` / `VPS_SSH_KEY` 等）只会出现在
+   * `deploy` job 里 —— 这正是这条断言名字里那个 `deploy:` 前缀的意思。
+   * 其余 job 里唯一的「凭据」是 `${{ secrets.GITHUB_TOKEN }}`，那是上下文引用，
+   * 本来就匹配不上这条正则。
+   */
+  const deployJob = serviceBlock(deploy, 'deploy');
   check(
     'deploy: 没有硬编码的 secret（值必须来自 secrets 上下文）',
-    !/(password|token|secret|key):\s*(?!\$\{\{)[^\s$]\S*/i.test(deploy),
+    !/(password|token|secret|key):\s*(?!\$\{\{)[^\s$]\S*/i.test(deployJob),
   );
 }
 

@@ -70,9 +70,78 @@ jobs:
 
       - run: pnpm ops:verify
 
+  # ── 集成测试（真实 MySQL 8.4 + Redis）────────────────────────────────
+  #
+  # ⚠ 2026-10-02 新增。此前**三套真实依赖的测试从未在 CI 里跑过** ——
+  # `test:db` / api 集成 / worker 集成只有人在本地手动跑（`pnpm test:ci` 明确
+  # 排除 `*.integration.spec.ts`，因为默认测试必须能在没有数据库的机器上通过）。
+  # 而它们抓的恰恰是单测抓不到的那一类：真 SQL、真唯一约束、真并发/死锁。
+  # 2026-10-01 那几个 P0（`applyEvidencePlan` 的 P2034 死锁、Topic 计数口径、
+  # `/today` 的排序）**全都是真库测试才可能发现的**。
+  #
+  # ⚠ **三步必须串行**：api 与 worker 的集成测试**共用同一个测试库**（不隔离
+  # schema），并行会让彼此的断言互相干扰。三份 vitest 配置里都写了
+  # `fileParallelism: false` 正是这个原因 —— 跨套件同理。
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: signal
+          MYSQL_USER: signal
+          MYSQL_PASSWORD: signal
+        ports: ['3306:3306']
+        # ⚠ healthcheck 是必需的：MySQL 容器「已启动」远早于「可接受连接」，
+        # 没有它第一步就会连不上（这正是 compose 那边踩过的同一个坑）。
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      # ⚠ 集成测试会先看 `process.env`、再回落到仓库根的 `.env` ——
+      # 而 CI 里那个文件**不存在**（被 gitignore）。所以必须由这里注入。
+      DATABASE_URL: mysql://signal:signal@127.0.0.1:3306/signal
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # ⚠ **不能省**：这些测试直接 `import '@prisma/client'`。
+      # 本地开发最容易忽略这一步 —— 开发机上早就有一份生成好的客户端，
+      # CI 是干净的。
+      - run: pnpm db:generate
+
+      # ⚠ migration 必须在测试之前：测试假设 schema 已是迁移后的形状。
+      - run: pnpm db:migrate
+
+      # ⚠ 三步**串行**（共用同一个库）。不要合并成一条并发命令。
+      - run: pnpm test:db
+      - run: pnpm --filter @signal/api test:integration
+      - run: pnpm --filter @signal/worker test:integration
+
   # ── 构建并推镜像 ─────────────────────────────────────────────────────
   build:
-    needs: test
+    needs: [test, integration]
     runs-on: ubuntu-latest
     permissions:
       contents: read
