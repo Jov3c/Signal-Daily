@@ -48,7 +48,7 @@ function readRepo(relative: string): string {
  * 嵌套对象被整个跳过：比较顶层已经能抓住改名，而递归比较会把
  * 「后端把嵌套对象拆成两个字段」这种正当重构也判红。
  */
-function topLevelFields(rawSource: string, typeName: string): string[] {
+function topLevelFields(rawSource: string, typeName: string, depth = 0): string[] {
   // ⚠ 必须先剥注释，两个理由：
   //   1. 注释里出现的 `{` / `}` 会让配对扫描跑偏；
   //   2. **带文档注释的字段会被漏掉** —— 字段名前面隔着一段 `/** … */` 时，
@@ -56,18 +56,49 @@ function topLevelFields(rawSource: string, typeName: string): string[] {
   //      `MeDto.id` / `AdminJobRun.durationMs`，而它们恰好都带注释）。
   const source = rawSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
-  const pattern = new RegExp(String.raw`(?:export\s+)?type\s+${typeName}\s*=\s*\{`);
+  const pattern = new RegExp(String.raw`(?:export\s+)?type\s+${typeName}\s*=\s*`);
   const match = pattern.exec(source);
   if (match === null) return [];
 
-  let depth = 0;
-  let index = match.index + match[0].length - 1;
+  // 从 `=` 之后跳过空白，再看第一个有意义的字符是什么。
+  let cursor = match.index + match[0].length;
+  while (cursor < source.length && /\s/.test(source[cursor] ?? '')) cursor += 1;
+
+  /**
+   * ⚠ 支持**交叉类型**：`type X = Base & { … }` —— 2026-10-02 补。
+   *
+   * 起因：`apps/api/src/modules/daily/service.ts` 的
+   * `EditionSummary = EditionRow & { editionNoLabel; itemCount }` 是 admin 列表
+   * 接口的**真源**，但原来的正则要求 `=` 后**紧跟** `{`，于是它解析出 **0 个字段**。
+   *
+   * 而 `expectFieldsExist` 对「解析失败」是**直接判红**的（那条设计是对的：
+   * 空的会被误读成「一致」），所以只能扩展解析器，不能绕开它去指个能解析的类型 ——
+   * 指 `EditionRow` 恰好会漏掉 `editionNoLabel` / `itemCount` 这两个**真正会漂移**的字段。
+   *
+   * 只处理**一层** `Base & { … }`：更深的交叉在这个仓库里不存在，
+   * 真出现了会因为解析不到而红，不会静默漏。
+   */
+  const inherited: string[] = [];
+  const baseMatch = /^([A-Za-z_$][\w$]*)\s*&/.exec(source.slice(cursor));
+  if (baseMatch?.[1] !== undefined && depth < 2) {
+    inherited.push(...topLevelFields(rawSource, baseMatch[1], depth + 1));
+  }
+
+  const braceAt = source.indexOf('{', cursor);
+  if (braceAt === -1) return inherited;
+  // ⚠ 要求 `{` 之前只有「空白」或「Base &」——否则它不是对象字面量别名
+  //（例如 `type Foo = string`），不该硬从后面找个 `{` 来解析。
+  const head = source.slice(cursor, braceAt);
+  if (!/^\s*(?:[A-Za-z_$][\w$]*\s*&\s*)?$/.test(head)) return inherited;
+
+  let depthCount = 0;
+  let index = braceAt;
   const start = index;
   for (; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
+    if (source[index] === '{') depthCount += 1;
     else if (source[index] === '}') {
-      depth -= 1;
-      if (depth === 0) break;
+      depthCount -= 1;
+      if (depthCount === 0) break;
     }
   }
   const body = source.slice(start + 1, index);
@@ -92,7 +123,7 @@ function topLevelFields(rawSource: string, typeName: string): string[] {
     current += char;
   }
   flush();
-  return fields;
+  return [...new Set([...inherited, ...fields])];
 }
 
 /** 断言：前端声明的每个字段都在后端类型里。 */
@@ -159,6 +190,30 @@ describe('⚠ 镜像类型必须与后端真源对得上（改名就会红）', 
     const api = readRepo('apps/api/src/modules/daily/public-view.ts');
     expectFieldsExist(WEB_TYPES, 'PublicDailyEdition', api, 'PublicDailyEdition');
     expectFieldsExist(WEB_TYPES, 'PublicDailyArchiveEntry', api, 'PublicDailyArchiveEntry');
+  });
+
+  /**
+   * ⚠ 2026-10-02 补（清单 P3-01）。此前**没有**这条 —— 而漂移是真实存在的：
+   * 前端写 `id`、后端是 `editionId`，且前端漏了 `editionNoLabel`。
+   * 它没爆是因为后台日报页当前只读 `row.itemCount`；
+   * **改名不会让任何测试变红**，直到有人开始读那个字段。
+   *
+   * 真源是 `daily/service.ts` 的 `EditionSummary`（= `EditionRow & { … }`，
+   * 也就是接口实际返回的那个）。这条同时也在守解析器对**交叉类型**的支持 ——
+   * 解析不出来的话 `expectFieldsExist` 会直接判红。
+   */
+  it('`AdminEditionRow` ← Agent 08 的 daily/service.ts 的 `EditionSummary`', () => {
+    // ⚠ **两个文件拼起来给它**：`EditionSummary = EditionRow & { … }`，而基类型
+    // `EditionRow` 定义在 `repository.ts` 里 —— 解析器只看一份源码，
+    // 给单文件的话继承来的那 7 个字段会解析成空，然后被误判成「前端多了一堆字段」。
+    // 这个类型的**声明面本来就跨这两个文件**，拼起来才是它的完整定义。
+    expectFieldsExist(
+      WEB_ADMIN,
+      'AdminEditionRow',
+      readRepo('apps/api/src/modules/daily/service.ts') +
+        readRepo('apps/api/src/modules/daily/repository.ts'),
+      'EditionSummary',
+    );
   });
 
   it('`DashboardStats` / `ReviewListRow` ← Agent 07 的 admin-review/repository.ts', () => {

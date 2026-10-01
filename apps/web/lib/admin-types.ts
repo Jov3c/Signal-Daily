@@ -226,11 +226,30 @@ export type SourceDto = {
 /* 日报编排                                                            */
 /* ------------------------------------------------------------------ */
 
-/** `GET /admin/daily` 的一行。真源：`daily/repository.ts` 的 `EditionRow`。 */
+/**
+ * `GET /admin/daily` 的一行。
+ *
+ * ⚠ **真源是 `DailyService.EditionSummary`**，不是 `daily/repository.ts` 的
+ * `EditionRow` —— 2026-10-02 修。`EditionSummary = EditionRow & { editionNoLabel;
+ * itemCount }`，**接口返回的是它**；指向 `EditionRow` 会漏掉那两个字段，
+ * 而它们恰好是最容易漂移的部分。
+ *
+ * 原先这里有两处漂移（清单 P3-01）：
+ *
+ * ```text
+ *   id            ← 后端是 `editionId`
+ *   （缺）         ← 后端还有 `editionNoLabel`
+ * ```
+ *
+ * 之所以没爆：后台日报页当前只读 `row.itemCount`。**改名不会让任何测试变红** ——
+ * 直到有人开始读那个字段。现已纳入 `contract-parity.spec.ts`。
+ */
 export type AdminEditionRow = {
-  id: string;
+  editionId: string;
   businessDate: string;
   editionNo: number | null;
+  /** 期号的人类可读形式（`NO.001`）；未发布时为 `null`。 */
+  editionNoLabel: string | null;
   status: DailyEditionStatus;
   headline: string | null;
   scheduledAt: string | null;
