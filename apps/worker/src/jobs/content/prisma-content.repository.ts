@@ -525,51 +525,90 @@ export class PrismaContentRepository implements ContentRepository {
       throw new Error(`Non-bindable eventId: ${eventId}`);
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // 1) 先清掉旧的 Primary —— 必须在插入之前，否则中间态会出现两个 primary。
-      if (plan.reassignPrimary) {
-        await tx.eventEvidence.updateMany({
-          where: { eventId: id, isPrimary: true },
-          data: { isPrimary: false },
-        });
-      }
+    const attempt = (): Promise<{
+      inserted: number;
+      primaryUrlHash: string | null;
+      independentSourceCount: number;
+    }> =>
+      this.prisma.$transaction(async (tx) => {
+        // 1) 先清掉旧的 Primary —— 必须在插入之前，否则中间态会出现两个 primary。
+        if (plan.reassignPrimary) {
+          await tx.eventEvidence.updateMany({
+            where: { eventId: id, isPrimary: true },
+            data: { isPrimary: false },
+          });
+        }
 
-      // 2) 插入新证据。`(eventId, urlHash)` 唯一；并发下靠 skipDuplicates
-      //    兜底（另一个 worker 刚插了同一条），不报错。
-      let inserted = 0;
-      if (plan.toInsert.length > 0) {
-        const result = await tx.eventEvidence.createMany({
-          data: plan.toInsert.map((draft) => ({
-            eventId: id,
-            contentId: toBindableId(draft.contentId),
-            sourceId: toBindableId(draft.sourceId),
-            evidenceType: draft.evidenceType as never,
-            title: draft.title,
-            url: draft.url,
-            urlHash: draft.urlHash,
-            publishedAt: draft.publishedAt,
-            isPrimary: false,
-          })),
-          skipDuplicates: true,
-        });
-        inserted = result.count;
-      }
+        // 2) 插入新证据。`(eventId, urlHash)` 唯一；并发下靠 skipDuplicates
+        //    兜底（另一个 worker 刚插了同一条），不报错。
+        let inserted = 0;
+        if (plan.toInsert.length > 0) {
+          const result = await tx.eventEvidence.createMany({
+            data: plan.toInsert.map((draft) => ({
+              eventId: id,
+              contentId: toBindableId(draft.contentId),
+              sourceId: toBindableId(draft.sourceId),
+              evidenceType: draft.evidenceType as never,
+              title: draft.title,
+              url: draft.url,
+              urlHash: draft.urlHash,
+              publishedAt: draft.publishedAt,
+              isPrimary: false,
+            })),
+            skipDuplicates: true,
+          });
+          inserted = result.count;
+        }
 
-      // 3) 设置新的 Primary（用 urlHash 而不是「草稿里的那条」——
-      //    选中的可能是**已存在**的证据，它不在 toInsert 里）。
-      if (plan.primaryUrlHash !== null && plan.reassignPrimary) {
-        await tx.eventEvidence.updateMany({
-          where: { eventId: id, urlHash: plan.primaryUrlHash },
-          data: { isPrimary: true },
-        });
-      }
+        // 3) 设置新的 Primary（用 urlHash 而不是「草稿里的那条」——
+        //    选中的可能是**已存在**的证据，它不在 toInsert 里）。
+        if (plan.primaryUrlHash !== null && plan.reassignPrimary) {
+          await tx.eventEvidence.updateMany({
+            where: { eventId: id, urlHash: plan.primaryUrlHash },
+            data: { isPrimary: true },
+          });
+        }
 
-      return {
-        inserted,
-        primaryUrlHash: plan.primaryUrlHash,
-        independentSourceCount: plan.independentSourceCount,
-      };
-    });
+        return {
+          inserted,
+          primaryUrlHash: plan.primaryUrlHash,
+          independentSourceCount: plan.independentSourceCount,
+        };
+      });
+
+    /**
+     * ⚠ **P2034 重试 —— 2026-10-01 补，照 `createContentAndAdvance` 的同一模式。**
+     *
+     * 事故：流水线接上之后（`raw → normalize` 的入口补上，见 `08fbb2b`），
+     * 每批 50 条并发跑 `event-cluster`，这里撞 Prisma **P2034（写冲突/死锁）**：
+     *
+     * ```text
+     *   Invalid `prisma.eventEvidence.createMany()` invocation:
+     *   Transaction failed due to a write conflict or a deadlock.
+     *   → job_runs: content.event-cluster FAILED 92（在有 249 条成功的同时）
+     * ```
+     *
+     * BullMQ 的重试救回了绝大多数，**但有 1 条（content id=6）三次重试耗尽，
+     * 永远停在 `INGESTED`** —— 不进 AI、不进审核队列，即那条内容**永久卡死**。
+     *
+     * 同文件的 `createContentAndAdvance` 早就写了这个重试，而且它的注释里
+     * **明确预见了「证据挂接」会参与死锁** —— 只是那个预见没有落成代码。
+     *
+     * ── 为什么重试在这里是安全的 ──────────────────────────────────────
+     * P2034 意味着**整个事务被 InnoDB 回滚了**，什么都没留下 —— 不是「已经做了一半」。
+     * 所以重跑一遍不存在重复写入的风险；而 `(eventId, urlHash)` 唯一 +
+     * `skipDuplicates: true` 又兜了一层（并发下另一个 worker 可能已经插了同一条）。
+     *
+     * ⚠ 只重试**一次**，与 `createContentAndAdvance` 保持一致：P2034 是瞬时故障，
+     * 一次通常就够；真正的持续冲突（例如死锁环）重试再多也没用，应该让它冒上去
+     * 由 BullMQ 的重试与告警接手，而不是在这里空转。
+     */
+    try {
+      return await attempt();
+    } catch (error) {
+      if (isTransactionConflict(error)) return await attempt();
+      throw error;
+    }
   }
 
   async markAnalyzing(contentId: string): Promise<void> {

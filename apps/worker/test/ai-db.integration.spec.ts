@@ -24,7 +24,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { WorkerPrismaService } from '../src/jobs/ai/prisma.service';
 import {
   AiRunStatus,
   AiTaskType,
@@ -60,7 +60,10 @@ function resolveDatabaseUrl(): string {
   throw new Error('DATABASE_URL is not set and could not be read from the repository .env');
 }
 
-const prisma = new PrismaClient({ datasources: { db: { url: resolveDatabaseUrl() } } });
+// ⚠ 用 `WorkerPrismaService` 而不是裸 `PrismaClient`：`PrismaAiRepository` 的构造
+// 参数现在显式对齐到它（2026-10-01 修 DI 缺陷时改的），而它是 `PrismaClient` 的
+// **子类** —— 传父类实例会被 `tsc -p test/tsconfig.json` 挡住（那条检查存在的意义）。
+const prisma = new WorkerPrismaService({ datasources: { db: { url: resolveDatabaseUrl() } } });
 const repository = new PrismaAiRepository(prisma);
 
 let sourceId: bigint;

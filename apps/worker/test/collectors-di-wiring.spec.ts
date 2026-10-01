@@ -73,13 +73,40 @@ import { ContentPrismaService } from '../src/jobs/content/prisma.service';
  * 理由：这条守卫的判据是「类类型的构造参数有没有显式 `@Inject`」，
  * 而它只是一个**源码文本启发式** —— 是否真的会退化，取决于那个类型
  * 在运行期是不是一个值（TypeScript 对不同 import 形式的处理不同）。
- *
- * 实测：`apps/worker/src/jobs/ai/**`（Agent 06）里有一处同样形态的写法
- * （`constructor(private readonly prisma: PrismaClient)` + `import type`），
- * 但 `Test.createTestingModule({imports:[AiWorkerModule]}).compile()`
- * **能通过** —— 也就是说那不是缺陷。
  * 一个会在别人模块上误报的守卫，除了挡住别人的工作之外没有价值。
  * 整个 Worker 的装配由 **Agent 14** 在集成阶段用真实的 `WorkerModule` 验。
+ *
+ * ── ⚠⚠ 2026-10-01 更正：这里原本有一段结论**是错的** ──────────────────
+ *
+ * 原文写着：
+ *
+ * ```text
+ * 实测：apps/worker/src/jobs/ai/**（Agent 06）里有一处同样形态的写法
+ * （constructor(private readonly prisma: PrismaClient) + import type），
+ * 但 Test.createTestingModule({imports:[AiWorkerModule]}).compile()
+ * 能通过 —— 也就是说那不是缺陷。
+ * ```
+ *
+ * **它就是缺陷。** 2026-10-01 实测（配了真实 AI 调用链之后）：
+ *
+ * ```text
+ *   {"level":"error","message":"PERMANENT: Cannot read properties of undefined
+ *                               (reading 'aiRun')"}
+ * ```
+ *
+ * `PrismaAiRepository.this.prisma` 在运行期是 `undefined`，AI 每一步都炸，
+ * 而且 BullMQ 判成 **PERMANENT（不可重试）** —— AI 评分 / 翻译**完全不可用**。
+ * 已修（`ai/prisma-ai-run.repository.ts` 补上 `@Injectable()` + `@Inject`）。
+ *
+ * **为什么当年会误判**：`compile()` 只**建依赖图**，不实例化 provider ——
+ * 而这一类 bug 恰恰只在**实例化**时才现形。用一个抓不到它的手段去验它，
+ * 得到的「通过」是假阴性。**这是本文件最值得记住的一条教训**：
+ * 别拿一个覆盖不到目标的检查去宣布目标没问题。
+ *
+ * 现在的补法不是扩大本文件的扫描范围（那会把启发式的误报风险摊到别人模块上），
+ * 而是给那两个**当时没有守卫的模块**各补一份自己的：
+ * `ai-content-di-wiring.spec.ts`。per-module 的约定不变，
+ * 缺的是「**新模块必须自带一份**」—— 这一条比范围更重要。
  */
 const COLLECTORS_SRC = fileURLToPath(new URL('../src/jobs/collectors', import.meta.url));
 /** Worker 的 `src` 根 —— 用于把绝对路径裁成可读的相对路径。 */

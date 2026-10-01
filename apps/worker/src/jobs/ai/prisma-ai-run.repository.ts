@@ -8,8 +8,10 @@
  * `ai-score-write-scope.spec.ts` 会直接断言这一点。
  */
 
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Inject, Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { AiRunStatus, SOURCE_KINDS, SOURCE_TIERS } from '@signal/contracts';
+import { WorkerPrismaService } from './prisma.service';
 import type {
   AiArtifact,
   AiContentRecord,
@@ -36,8 +38,36 @@ const CONTENT_SELECT = {
   },
 } as const;
 
+@Injectable()
 export class PrismaAiRepository implements AiRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  /**
+   * ⚠ **必须 `@Injectable()` + 显式 `@Inject(...)`** —— 2026-10-01 修。
+   *
+   * 原来写的是 `constructor(private readonly prisma: PrismaClient) {}`，
+   * 类上也没有 `@Injectable()`。两个问题叠在一起，结果是**运行期 `this.prisma`
+   * 是 `undefined`**，AI 每一步都炸：
+   *
+   * ```text
+   *   PERMANENT: Cannot read properties of undefined (reading 'aiRun')
+   * ```
+   *
+   * `PERMANENT:` 是关键 —— BullMQ 把它判成**不可重试**，所以这不是「偶尔失败」，
+   * 而是「AI 评分 / 翻译这条业务能力完全不可用」。**即便配了 API key 也一样**：
+   * 炸在解析依赖这一层，还没走到调用模型。
+   *
+   * ── 为什么会这样 ────────────────────────────────────────────────────
+   * 1. 文件顶部原本是 `import type { Prisma, PrismaClient }` —— `type` 关键字
+   *    让它在**运行期被整句擦除**，所以 `design:paramtypes` 里那个类型 token
+   *    指向一个不存在的东西，Nest 解析不出来。
+   * 2. 类上没有 `@Injectable()`，`emitDecoratorMetadata` 根本没有跑过 ——
+   *    连 `design:paramtypes` 都不会被发射。
+   *
+   * 这是本仓库反复踩到的同一类陷阱（Agent 14 的 `BullSourceFetchQueue` 是
+   * `useClass` + 参数元数据不可靠）。**同一个模块里的
+   * `prisma-job-run.repository.ts` 一直是对的**（`@Inject(WorkerPrismaService)`），
+   * 只有这一个漏了 —— 所以照它改，而不是发明新写法。
+   */
+  constructor(@Inject(WorkerPrismaService) private readonly prisma: WorkerPrismaService) {}
 
   async findContent(contentId: string): Promise<AiContentRecord | null> {
     const row = await this.prisma.content.findUnique({
