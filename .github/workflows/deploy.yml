@@ -151,6 +151,96 @@ jobs:
       - run: pnpm --filter @signal/api test:integration
       - run: pnpm --filter @signal/worker test:integration
 
+  # ── 真浏览器 E2E（Playwright）─────────────────────────────────────────
+  #
+  # ⚠ 2026-10-02 新增。清单 P2-05 明确要求：**先作为独立 job 接入，
+  # 不要第一步就设成部署要求** —— Playwright 在 CI 里最容易假红，
+  # 第一轮先确认环境稳定，稳定之后再由用户决定要不要并进 `build.needs`。
+  # 所以本 job **不在 `build.needs` 里**。
+  #
+  # 保留 harness 自带的全部护栏（它们在这里同样是有效的）：
+  #   NODE_ENV=production 拒绝运行 / 非本机 DB 或 Redis 拒绝运行 /
+  #   构建产物不新鲜拒绝运行 / 用例自己拒绝 page.reload()。
+  e2e:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: signal
+          MYSQL_USER: signal
+          MYSQL_PASSWORD: signal
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+      redis:
+        image: redis:7
+        # ⚠ **映射到 6390，不是 6379** —— 不是笔误。
+        # `e2e/helpers.ts` 里有一条本机约定：`rewriteRedisPort()` **无条件**把
+        # REDIS_URL 的端口改成 6390（开发机上 `.env` 写 6379 而实跑的 Redis 在 6390）。
+        # 那条约定没有「显式指定就不覆盖」的逃生口，所以 CI 必须顺着它来 ——
+        # 否则 api 子进程会去连一个没人监听的端口，失败信息还完全指不到这里。
+        ports: ['6390:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      # ⚠ harness 的 `loadHarnessEnv()` 会读仓库根的 `.env` —— CI 里没有那个文件
+      #（被 gitignore）。所以 api 子进程 `parseEnv()` 需要的每一项都必须由这里给。
+      # 取值与 `@signal/test-utils` 的 `TEST_ENV` 一致，除了 NODE_ENV：
+      # harness 要求 `development`（api 的 `ConsoleMailSender` 在 production 下
+      # 按设计拒绝工作，那样就拿不到验证码，登录用例必挂）。
+      NODE_ENV: development
+      APP_TIMEZONE: Asia/Shanghai
+      APP_BASE_URL: http://localhost:3000
+      API_BASE_URL: http://localhost:3000/api
+      DATABASE_URL: mysql://signal:signal@127.0.0.1:3306/signal
+      REDIS_URL: redis://127.0.0.1:6390
+      AUTH_ACCESS_TOKEN_SECRET: e2e-access-token-secret
+      AUTH_REFRESH_TOKEN_PEPPER: e2e-refresh-token-pepper
+      EMAIL_OTP_PEPPER: e2e-email-otp-pepper
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm db:generate
+      - run: pnpm db:migrate
+
+      # ⚠ **两个构建都不能省**：harness 起的是 `node apps/api/dist/main.js` 与
+      # `next start`，而且它有一条**构建新鲜度硬校验** —— 源码比产物新就直接
+      # 拒绝运行（防止「改了代码忘了重建」跑出假绿）。所以这里必须和它对齐。
+      - run: pnpm build
+      - run: pnpm --filter @signal/web build
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: pnpm test:e2e
+
+      # 失败时把 trace / 截图 / 错误上下文带出来 —— 没有它们，CI 上的
+      # Playwright 失败基本等于「红了一个数字」，没法排查。
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-artifacts
+          path: e2e/.artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # ── 构建并推镜像 ─────────────────────────────────────────────────────
   build:
     needs: [test, integration]
