@@ -194,10 +194,22 @@ jobs:
     env:
       # ⚠ harness 的 `loadHarnessEnv()` 会读仓库根的 `.env` —— CI 里没有那个文件
       #（被 gitignore）。所以 api 子进程 `parseEnv()` 需要的每一项都必须由这里给。
-      # 取值与 `@signal/test-utils` 的 `TEST_ENV` 一致，除了 NODE_ENV：
-      # harness 要求 `development`（api 的 `ConsoleMailSender` 在 production 下
-      # 按设计拒绝工作，那样就拿不到验证码，登录用例必挂）。
-      NODE_ENV: development
+      # 取值与 `@signal/test-utils` 的 `TEST_ENV` 一致。
+      #
+      # ⚠⚠ **这里刻意不设 `NODE_ENV`** —— 2026-10-02 实测踩到。
+      # 第一版设了 `NODE_ENV: development`（想着 harness 要它），结果
+      # `pnpm --filter @signal/web build` **当场失败**：
+      #
+      # ```text
+      #   ⚠ You are using a non-standard "NODE_ENV" value in your environment.
+      #   Error: <Html> should not be imported outside of pages/_document.
+      # ```
+      #
+      # `next build` 不接受非标准的 NODE_ENV。而且设它**本来就是多余的**：
+      # `loadHarnessEnv()` 里是 `merged['NODE_ENV'] ?? 'development'` ——
+      # 不设就落成 development，api 子进程照样拿到它要的那个值；
+      # 而 web 子进程的 NODE_ENV 是**硬编码** `production` 的（`next start` 要它）。
+      # 换句话说：job 这一层设 NODE_ENV 只会影响**构建**，而构建恰恰不能要它。
       APP_TIMEZONE: Asia/Shanghai
       APP_BASE_URL: http://localhost:3000
       API_BASE_URL: http://localhost:3000/api
