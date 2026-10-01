@@ -212,7 +212,26 @@ jobs:
       # 换句话说：job 这一层设 NODE_ENV 只会影响**构建**，而构建恰恰不能要它。
       APP_TIMEZONE: Asia/Shanghai
       APP_BASE_URL: http://localhost:3000
-      API_BASE_URL: http://localhost:3000/api
+      # ⚠⚠ **必须是 API 的地址，不能是「同源」那个值** —— 2026-10-02 实测踩到。
+      #
+      # 第一版这里写的是 `.env` 里的 `http://localhost:3000/api`（那是 **nginx 同域
+      # 形态**的值：浏览器打 `/api/`，nginx 转给 api）。但 `next.config.mjs` 的
+      # `rewrites()` 是**在构建时求值一次**的：
+      #
+      # ```text
+      #   destination = `${process.env.API_BASE_URL}/:path*`
+      # ```
+      #
+      # 于是 CI 里那条 rewrite 的目标被烤成了 `http://localhost:3000/api` ——
+      # **指向 web 自己**，每个 `/api/*` 请求都绕回自身 → 首页 500。
+      # harness 的报错只说「等待 web 首页就绪超时，最后一次结果：HTTP 500」，
+      # 看不出是这里。
+      #
+      # 本地为什么没暴露：开发机 shell 里**没有** `API_BASE_URL`，
+      # 构建走 `next.config.mjs` 的默认值 `http://127.0.0.1:3001/api`（**直连 api**）
+      # —— 那正是 harness 形态该用的值（它没有 nginx）。这里显式写出来，
+      # 而不是依赖两个文件里的默认值一直保持一致。
+      API_BASE_URL: http://127.0.0.1:3001/api
       DATABASE_URL: mysql://signal:signal@127.0.0.1:3306/signal
       REDIS_URL: redis://127.0.0.1:6390
       AUTH_ACCESS_TOKEN_SECRET: e2e-access-token-secret
