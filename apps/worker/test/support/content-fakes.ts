@@ -112,6 +112,23 @@ export class InMemoryContentRepository implements ContentRepository {
     return null;
   }
 
+  /**
+   * 复刻真实查询：`status = FETCHED 且没有对应 Content`，按 id 升序取前 N 条。
+   *
+   * ⚠ 必须**按 rawItemId 升序**（真实现是 `orderBy: { id: 'asc' }`）。
+   * 这里是 Map 的插入序，恰好等于种子顺序 —— 与真库的自增 id 顺序一致。
+   */
+  async findRawItemsAwaitingNormalize(limit: number): Promise<string[]> {
+    const found: string[] = [];
+    for (const [rawItemId, row] of this.rawItems) {
+      if (row.status !== RawItemStatus.FETCHED) continue;
+      if ((await this.findContentIdByRawItemId(rawItemId)) !== null) continue;
+      found.push(rawItemId);
+      if (found.length >= limit) break;
+    }
+    return found;
+  }
+
   async createContentAndAdvance(input: NewContent): Promise<PersistOutcome> {
     if (this.failCreate !== null) throw this.failCreate;
 
@@ -588,7 +605,11 @@ export class RecordingContentEnqueuer implements ContentEnqueuer {
   /** 让测试能注入「入队失败」，验证流水线不会静默断掉。 */
   failDedup: Error | null = null;
 
+  /** 让测试能注入 `content.normalize` 入队失败（兜底扫描的重试语义用它）。 */
+  failNormalize: Error | null = null;
+
   async enqueueNormalize(rawItemId: string): Promise<void> {
+    if (this.failNormalize !== null) throw this.failNormalize;
     this.normalized.push(rawItemId);
   }
 

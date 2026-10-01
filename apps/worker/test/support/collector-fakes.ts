@@ -35,6 +35,7 @@ import type {
   JobRunInput,
   JobRunRepository,
   NewRawItem,
+  NormalizeEnqueuer,
   RawItemRepository,
   SourceFetchQueue,
   SourceLock,
@@ -213,6 +214,11 @@ export class InMemorySourceRepository implements CollectorSourceRepository {
 
 export class InMemoryRawItemRepository implements RawItemRepository {
   readonly inserted: NewRawItem[] = [];
+  /** 每次 `insertMany` 实际返回的 id（与 `inserted` 一一对应，用于断言「入队了谁」）。 */
+  readonly insertedIds: string[] = [];
+
+  /** 自增 id 起点。真实库里 `raw_items.id` 是自增 BIGINT，形态是十进制字符串。 */
+  private nextId = 1000;
 
   constructor(
     private readonly existing: ExistingKeys = {
@@ -239,13 +245,17 @@ export class InMemoryRawItemRepository implements RawItemRepository {
    * 写进去的行下一次 `findExistingKeys` 必须查得到。
    * 少了这一步，「抓两次不重复」这类用例会因为替身不像真库而假绿/假红。
    */
-  async insertMany(items: NewRawItem[]): Promise<number> {
+  async insertMany(items: NewRawItem[]): Promise<string[]> {
     this.inserted.push(...items);
     for (const item of items) {
       if (item.externalId !== null) this.existing.externalIds.add(item.externalId);
       this.existing.canonicalUrlHashes.add(item.canonicalUrlHash);
     }
-    return items.length;
+
+    // 与真实实现一致：返回**真正写入的** id（自增、十进制字符串）。
+    const ids = items.map(() => String((this.nextId += 1)));
+    this.insertedIds.push(...ids);
+    return ids;
   }
 
   seedExisting(keys: { externalIds?: string[]; canonicalUrlHashes?: string[] }): void {
@@ -329,6 +339,25 @@ export class InMemorySourceLock implements SourceLock {
 
   async release(key: string, token: string): Promise<void> {
     if (this.held.get(key) === token) this.held.delete(key);
+  }
+}
+
+/**
+ * 内容流水线入口的替身（`NormalizeEnqueuer`）。
+ *
+ * 与 `InMemorySourceFetchQueue` 同一原则：只记录「被要求入队了什么」，
+ * 不模拟 BullMQ 内部。`failAll` 用来验证「入队失败不炸这一轮采集」——
+ * 那正是兜底扫描存在的前提。
+ */
+export class InMemoryNormalizeEnqueuer implements NormalizeEnqueuer {
+  readonly enqueued: string[] = [];
+
+  /** 非 null 时每次入队都抛这个错误（模拟 Redis / 队列故障）。 */
+  failAll: Error | null = null;
+
+  async enqueueNormalize(rawItemId: string): Promise<void> {
+    if (this.failAll !== null) throw this.failAll;
+    this.enqueued.push(rawItemId);
   }
 }
 

@@ -123,8 +123,58 @@ export interface RawItemRepository {
    * 几个月后可能有几万条 RawItem，全量拉取会让每次采集的内存随时间线性增长。
    */
   findExistingKeys(query: ExistingKeysQuery): Promise<ExistingKeys>;
-  /** 批量插入，返回真正写入的条数。 */
-  insertMany(items: NewRawItem[]): Promise<number>;
+  /**
+   * 批量插入，返回**真正写入的 raw item id**（十进制字符串，契约里 BIGINT 的形态）。
+   *
+   * 为什么返回 id 而不是条数：采集器存完之后必须把它们交给内容流水线
+   *（`content.normalize`），而那一步的载荷**就是** raw item id
+   *（见下面的 `NORMALIZE_ENQUEUER`）。只返回条数的话，调用方拿不到「交给谁」——
+   * 而这正是本次补的缺口：`raw → normalize` 之前根本没人触发。
+   *
+   * ⚠ 调用前提与 `findExistingKeys` 相同：**必须在持有
+   * `source-fetch:{sourceId}` 锁时调用**。实现要靠「先查后写」排除已有的键，
+   * 见 `prisma-raw-item.repository.ts`。
+   */
+  insertMany(items: NewRawItem[]): Promise<string[]>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pipeline 入口（raw → normalize）                                    */
+/* ------------------------------------------------------------------ */
+
+/** 注入 token。 */
+export const NORMALIZE_ENQUEUER = 'COLLECTOR_NORMALIZE_ENQUEUER';
+
+/**
+ * 「把一条刚落库的 RawItem 交给内容流水线的 normalize 阶段」。
+ *
+ * ── 为什么这个端口必须存在（这是一个被证实的缺口，不是我猜的）────────
+ * `docs/17` 的核心链路是 `add source → fetch → raw → pipeline → …`，
+ * 但 `raw → normalize` 这一步**在生产代码里没有任何触发者**：
+ * `ContentEnqueuer.enqueueNormalize` 只有它自己、一个 noop、以及一个测试替身
+ * 引用过。后果是 Redis 里的 `bull:content-pipeline:*` 永远只有
+ * `meta` / `stalled-check`（从未收到过任务），`raw_items` 堆在 `FETCHED`、
+ * `contents` 恒为 0，链路永久停住。
+ *
+ * 采集器是**唯一知道「哪几条是本次真正新写入的」的地方**（去重命中的
+ * 不是新内容，不该再入队），所以入口补在这里，而不是让内容侧去猜。
+ *
+ * ── 为什么是端口而不是直接 import ContentService ────────────────────
+ * 全仓的写法是 ports & adapters（同 `SOURCE_FETCH_QUEUE`）：采集器只依赖
+ * 本模块自己的窄接口，具体由谁实现（现在是 `ContentPipelineModule` 导出的
+ * `CONTENT_ENQUEUER`）在 `module.ts` 里接线。这样两个 Job 模块之间没有
+ * 类型层面的耦合，单测也能用一个记录调用的替身完整验证行为。
+ */
+export interface NormalizeEnqueuer {
+  /**
+   * 入队 `content.normalize`。
+   *
+   * ⚠ 实现**不吞异常**（见 `content-enqueuer.ts` 的文件头）：入队失败意味着
+   * 「数据已经落库，但流水线不会继续」。调用方（`CollectorService`）的处置
+   * 见那里的 `enqueueForPipeline` —— 与内容侧不同，采集器选择「记录并继续」，
+   * 由 `ContentService.sweepForNormalize` 兜底。
+   */
+  enqueueNormalize(rawItemId: string): Promise<void>;
 }
 
 /* ------------------------------------------------------------------ */

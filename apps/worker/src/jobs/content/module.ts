@@ -8,7 +8,8 @@
  * 与 Agent 04 的 `CollectorsModule`、Agent 06 的 `AiWorkerModule` 对齐：
  * `ContentPipelineWorker` 是本模块的 provider，由 `onModuleInit` 启动、
  * `onModuleDestroy` 关闭 —— **`imports: [ContentPipelineModule]` 这一个动作
- * 就完成了接线**。
+ * 就完成了接线**（消费 `content-pipeline` 队列 + 两个兜底扫描定时器：
+ * 入口的 `sweepForNormalize` 与收尾的 `sweepForReview`）。
  *
  * > Agent 06 的独立审查在那里发现过「`AiQueueWorker` 只被测试 new 过、
  * > 生产代码没有实例化路径」，于是即使 Agent 14 挂了模块也没有消费者。
@@ -46,6 +47,21 @@ import { AI_QUEUE_NAME } from '../ai';
  * 一分钟看到新候选，完全可接受；更密的轮询只是白烧数据库查询。
  */
 export const REVIEW_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * 入口兜底扫描的间隔。
+ *
+ * 取 60 秒，与收尾扫描同一档。这一条是**兜底**：正常路径是采集器存完
+ * RawItem 后立刻入队（低延迟），扫描只负责补「那次入队没发生」或
+ * 「入口补上之前的历史积压」。管理员感知不到它 —— 晚一分钟处理几条
+ * 积压数据完全可接受，更密的轮询只是白烧数据库查询。
+ *
+ * ⚠ 已知代价：`raw_items` 上没有 `status` 索引，`findRawItemsAwaitingNormalize`
+ * 会走一次全表扫（外加到 `contents` 的反向一对一 join）。V1 的数据量
+ * （每来源每轮最多几十条）下这不是问题，但库长大之后应该给 `status` 加索引 ——
+ * 那要改 `prisma/schema.prisma`（Agent 01 独占），已记入 HANDOFF，不在本次改动里。
+ */
+export const NORMALIZE_SWEEP_INTERVAL_MS = 60_000;
 
 /** 注入 token：入队用的 BullMQ `Queue`（content-pipeline）。 */
 export const CONTENT_QUEUE = 'CONTENT_QUEUE';
@@ -108,6 +124,7 @@ import { PrismaJobRunRecorder } from './prisma-job-run.repository';
 })
 export class ContentPipelineModule implements OnModuleInit, OnModuleDestroy {
   private sweepTimer: NodeJS.Timeout | null = null;
+  private normalizeSweepTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly worker: ContentPipelineWorker,
@@ -120,6 +137,23 @@ export class ContentPipelineModule implements OnModuleInit, OnModuleDestroy {
     if (!shouldStartConsumers()) return;
 
     await this.worker.start();
+
+    // ── 入口兜底扫描（raw → normalize）────────────────────────────
+    // 主入口在采集器那边（`CollectorService.enqueueForPipeline`）：存完
+    // RawItem 立刻入队，低延迟。这里只负责补「那次入队没发生」的情况，
+    // 以及本入口补上之前已经积压在 `FETCHED` 的历史数据。
+    //
+    // 与下面的收尾扫描同一套理由：用 `setInterval` 轮询而不是 BullMQ
+    // repeatable job（`docs/13` 的 Job 清单里没有这一类），也**不加分布式锁** ——
+    // `sweepForNormalize` 幂等：同一条 raw item 重复入队会被
+    // `normalizeJobId` 去重，两个实例同时跑没有副作用。
+    this.normalizeSweepTimer = setInterval(() => {
+      void this.service
+        .sweepForNormalize()
+        .catch((error: unknown) =>
+          this.logger.error({ err: error }, 'normalize sweep failed'),
+        );
+    }, NORMALIZE_SWEEP_INTERVAL_MS);
 
     // ── 收尾扫描 ──────────────────────────────────────────────────
     // `docs/13` 固定了 10 个 Job 名，content-pipeline 只有三个，
@@ -140,6 +174,8 @@ export class ContentPipelineModule implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.normalizeSweepTimer !== null) clearInterval(this.normalizeSweepTimer);
+    this.normalizeSweepTimer = null;
     if (this.sweepTimer !== null) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
     await this.worker.close();

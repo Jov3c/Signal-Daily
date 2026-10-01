@@ -17,6 +17,7 @@ import type { CollectorSource } from '../src/jobs/collectors/ports';
 import {
   FakeClock,
   InMemoryJobRunRepository,
+  InMemoryNormalizeEnqueuer,
   InMemoryRawItemRepository,
   InMemorySourceFetchQueue,
   InMemorySourceLock,
@@ -37,6 +38,7 @@ function buildService(options: {
   jobRuns?: InMemoryJobRunRepository;
   lock?: InMemorySourceLock;
   clock?: FakeClock;
+  pipeline?: InMemoryNormalizeEnqueuer;
 }) {
   const sources = new InMemorySourceRepository(
     options.sources ?? [createSource({ id: '1', type: SourceType.RSS })],
@@ -45,6 +47,7 @@ function buildService(options: {
   const jobRuns = options.jobRuns ?? new InMemoryJobRunRepository();
   const lock = options.lock ?? new InMemorySourceLock();
   const clock = options.clock ?? new FakeClock(START);
+  const pipeline = options.pipeline ?? new InMemoryNormalizeEnqueuer();
   const logStream = createMemoryStream();
 
   // 六个类型都填成同一个 stub —— `Record<SourceType, …>` 少一个键就编译不过，
@@ -70,9 +73,10 @@ function buildService(options: {
     lock,
     registry,
     createLogger({ service: 'collector-test', level: 'info', destination: logStream }),
+    pipeline,
   );
 
-  return { service, sources, rawItems, jobRuns, lock, clock, logStream };
+  return { service, sources, rawItems, jobRuns, lock, clock, pipeline, logStream };
 }
 
 const RUN = { attempt: 1, isFinalAttempt: false };
@@ -388,6 +392,117 @@ describe('CollectorService — 锁', () => {
   });
 });
 
+describe('CollectorService — 流水线入口（raw → normalize）', () => {
+  it('本次**新写入**的每一条都入队 normalize（这就是补上的那个缺口入口）', async () => {
+    const adapter = new StubAdapter(async () =>
+      batchOf([
+        createItem({ externalId: 'a', canonicalUrl: 'https://example.com/a' }),
+        createItem({ externalId: 'b', canonicalUrl: 'https://example.com/b' }),
+      ]),
+    );
+    const { service, rawItems, pipeline } = buildService({ adapter });
+
+    const outcome = await service.runCollect(createPayload(), RUN);
+
+    expect(outcome).toMatchObject({ stored: 2 });
+    // 入队的就是刚落库的那两个 id（顺序与落库一致）。
+    expect(pipeline.enqueued).toEqual(rawItems.insertedIds);
+    expect(pipeline.enqueued).toHaveLength(2);
+  });
+
+  it('去重命中的条目**不入队**（它们不是新内容，库里已经有了）', async () => {
+    const adapter = new StubAdapter(async () =>
+      batchOf([
+        createItem({ externalId: 'new', canonicalUrl: 'https://example.com/new' }),
+        createItem({ externalId: 'old', canonicalUrl: 'https://example.com/old' }),
+      ]),
+    );
+    const rawItems = new InMemoryRawItemRepository();
+    rawItems.seedExisting({ externalIds: ['old'] });
+    const { service, pipeline } = buildService({ adapter, rawItems });
+
+    const outcome = await service.runCollect(createPayload(), RUN);
+
+    expect(outcome).toMatchObject({ stored: 1, duplicates: 1 });
+    // 只有新写的那条入队 —— 去重命中那条不该产生一次注定走幂等分支的空跑。
+    expect(pipeline.enqueued).toEqual(rawItems.insertedIds);
+    expect(pipeline.enqueued).toHaveLength(1);
+  });
+
+  it('整批都被去重挡掉时一条都不入队', async () => {
+    const adapter = new StubAdapter(async () => batchOf([createItem()]));
+    const rawItems = new InMemoryRawItemRepository();
+    rawItems.seedExisting({ externalIds: ['item-1'] });
+    const { service, pipeline } = buildService({ adapter, rawItems });
+
+    const outcome = await service.runCollect(createPayload(), RUN);
+
+    expect(outcome).toMatchObject({ stored: 0, duplicates: 1 });
+    expect(pipeline.enqueued).toHaveLength(0);
+  });
+
+  it('空批次（适配器什么都没返回）不入队', async () => {
+    const adapter = new StubAdapter(async () => batchOf([]));
+    const { service, pipeline } = buildService({ adapter });
+
+    await service.runCollect(createPayload(), RUN);
+
+    expect(pipeline.enqueued).toHaveLength(0);
+  });
+
+  it('**入队失败不改变采集结论**，但会留 error 日志（兜底扫描会收）', async () => {
+    const adapter = new StubAdapter(async () => batchOf([createItem()]));
+    const pipeline = new InMemoryNormalizeEnqueuer();
+    pipeline.failAll = new Error('redis unavailable');
+    const { service, rawItems, jobRuns, sources, logStream } = buildService({
+      adapter,
+      pipeline,
+    });
+
+    const outcome = await service.runCollect(createPayload(), RUN);
+
+    // 采集本身是成功的：RawItem 已经落库，JobRun 记 SUCCEEDED，
+    // 也不该往 sources 写一个假的失败码。
+    expect(outcome).toMatchObject({ status: 'succeeded', stored: 1 });
+    expect(rawItems.inserted).toHaveLength(1);
+    expect(jobRuns.runs[0]!.finalled).toMatchObject({ status: 'SUCCEEDED' });
+    expect(sources.outcomes[0]!.outcome.errorCode).toBeNull();
+
+    // 但入队失败必须**可见** —— 不静默。
+    const text = logStream
+      .records()
+      .map((record) => JSON.stringify(record))
+      .join('\n');
+    expect(text).toContain('could not enqueue content.normalize');
+    expect(text).toContain('were not handed to the content pipeline');
+  });
+
+  it('一条入队失败不影响同批其它条目的入队（逐条隔离）', async () => {
+    const adapter = new StubAdapter(async () =>
+      batchOf([
+        createItem({ externalId: 'a', canonicalUrl: 'https://example.com/a' }),
+        createItem({ externalId: 'b', canonicalUrl: 'https://example.com/b' }),
+        createItem({ externalId: 'c', canonicalUrl: 'https://example.com/c' }),
+      ]),
+    );
+    const pipeline = new InMemoryNormalizeEnqueuer();
+    // 只有第 1 条失败，后面两条照常入队。
+    let call = 0;
+    const original = pipeline.enqueueNormalize.bind(pipeline);
+    pipeline.enqueueNormalize = async (rawItemId: string) => {
+      call += 1;
+      if (call === 1) throw new Error('transient');
+      await original(rawItemId);
+    };
+    const { service, rawItems } = buildService({ adapter, pipeline });
+
+    const outcome = await service.runCollect(createPayload(), RUN);
+
+    expect(outcome).toMatchObject({ stored: 3 });
+    expect(pipeline.enqueued).toEqual(rawItems.insertedIds.slice(1));
+  });
+});
+
 describe('CollectorService — 结论的形状', () => {
   it('所有结论都是显式对象，**不抛异常**（由 BullMQ 处理器决定重试语义）', async () => {
     const cases: (() => Promise<CollectOutcome>)[] = [];
@@ -429,6 +544,7 @@ describe('CollectorService — 结论的形状', () => {
       built.lock,
       empty,
       createLogger({ service: 'test', level: 'silent', destination: createMemoryStream() }),
+      built.pipeline,
     );
 
     const outcome = await service.runCollect(createPayload(), RUN);

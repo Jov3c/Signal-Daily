@@ -560,6 +560,7 @@ describe('端到端：真 service（内存仓储 + 真锁 + 真队列）', () =>
       InMemoryRawItemRepository,
       InMemorySourceRepository,
       InMemoryJobRunRepository,
+      InMemoryNormalizeEnqueuer,
       FakeClock,
       StubAdapter,
       createSource,
@@ -584,6 +585,9 @@ describe('端到端：真 service（内存仓储 + 真锁 + 真队列）', () =>
       lock,
       Object.fromEntries(Object.values(SourceType).map((type) => [type, adapter])) as never,
       silentLogger,
+      // 本文件验的是真锁 + 真队列的采集链路；内容流水线的入队用替身
+      //（真 BullMQ 的 normalize 入队由 `content-queue.integration.spec.ts` 覆盖）。
+      new InMemoryNormalizeEnqueuer(),
     );
 
     const outcome = await service.runCollect(

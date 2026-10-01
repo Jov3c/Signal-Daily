@@ -52,6 +52,20 @@ import {
 import { CLOCK, systemClock } from '../src/jobs/collectors/clock';
 import { WORKER_LOGGER } from '../src/jobs/collectors/logger';
 import { InMemorySourceFetchQueue, InMemorySourceLock } from './support/collector-fakes';
+// `CollectorsModule` 现在 `imports` 了 `ContentPipelineModule`（把新写入的
+// RawItem 交给 `content.normalize`），所以编译它也会实例化内容模块的 provider。
+// 那些 provider 里有两个 BullMQ `Queue` 工厂和一个 `parseEnv()` —— 都必须
+// override 掉，否则这个「无 MySQL / 无 Redis / 无 env」的守卫测试会去连 Redis、
+// 或在 `parseEnv()` 上直接抛。下面 `compileCollectorsModule()` 集中处理。
+import {
+  AI_QUEUE,
+  CONTENT_QUEUE,
+  NORMALIZE_SWEEP_INTERVAL_MS,
+  REVIEW_SWEEP_INTERVAL_MS,
+} from '../src/jobs/content/module';
+import { CONTENT_QUEUE_CONNECTION } from '../src/jobs/content/connection';
+import { CONTENT_LOGGER } from '../src/jobs/content/content.service';
+import { ContentPrismaService } from '../src/jobs/content/prisma.service';
 
 /**
  * ⚠ 扫描范围**只限本模块**（`src/jobs/collectors`），不是整个 `src`。
@@ -211,26 +225,51 @@ describe('构造参数必须显式声明 @Inject（防 emitDecoratorMetadata 退
 /* 2. 真解析（真实 CollectorsModule）                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 编译真实的 `CollectorsModule`，只替换**外部世界**：MySQL、Redis、BullMQ、
+ * 时钟、日志。其余全部是真实实现（service / scheduler / worker / 仓储）。
+ *
+ * ⚠ 因为本模块 `imports` 了 `ContentPipelineModule`，还要额外 override
+ * 内容模块的五个基础设施 provider（否则 `parseEnv()` 会抛、两个 `Queue`
+ * 工厂会去连 Redis）。这不是「测试太脏」——真实的生产依赖图里它们本来就
+ * 是外部世界的一部分，只是现在要在这里一次说完。
+ */
+function compileCollectorsModule() {
+  const silent = createLogger({
+    service: 'di-test',
+    level: 'silent',
+    destination: createMemoryStream(),
+  });
+
+  return Test.createTestingModule({ imports: [CollectorsModule] })
+    .overrideProvider(PrismaService)
+    .useValue({})
+    .overrideProvider(SOURCE_LOCK)
+    .useValue(new InMemorySourceLock())
+    .overrideProvider(SOURCE_FETCH_QUEUE)
+    .useValue(new InMemorySourceFetchQueue())
+    .overrideProvider(CLOCK)
+    .useValue(systemClock)
+    .overrideProvider(COLLECTOR_CONFIG)
+    .useValue(testConfig())
+    .overrideProvider(WORKER_LOGGER)
+    .useValue(silent)
+    // ── 内容模块的基础设施（被 imports 带进来）────────────────────────
+    .overrideProvider(ContentPrismaService)
+    .useValue({})
+    .overrideProvider(CONTENT_QUEUE_CONNECTION)
+    .useValue({})
+    .overrideProvider(CONTENT_QUEUE)
+    .useValue({ add: async () => undefined })
+    .overrideProvider(AI_QUEUE)
+    .useValue({ add: async () => undefined })
+    .overrideProvider(CONTENT_LOGGER)
+    .useValue(silent);
+}
+
 describe('CollectorsModule 的依赖图真的能建起来', () => {
   it('编译整个模块并取出关键 provider（失败的形态就是那个 P0 类缺陷）', async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [CollectorsModule] })
-      // 只替换**外部世界**：MySQL、Redis、BullMQ、时钟、日志。
-      // 其余全部是真实实现（service / scheduler / worker / 仓储）。
-      .overrideProvider(PrismaService)
-      .useValue({})
-      .overrideProvider(SOURCE_LOCK)
-      .useValue(new InMemorySourceLock())
-      .overrideProvider(SOURCE_FETCH_QUEUE)
-      .useValue(new InMemorySourceFetchQueue())
-      .overrideProvider(CLOCK)
-      .useValue(systemClock)
-      .overrideProvider(COLLECTOR_CONFIG)
-      .useValue(testConfig())
-      .overrideProvider(WORKER_LOGGER)
-      .useValue(
-        createLogger({ service: 'di-test', level: 'silent', destination: createMemoryStream() }),
-      )
-      .compile();
+    const moduleRef = await compileCollectorsModule().compile();
 
     expect(moduleRef.get(CollectorService)).toBeInstanceOf(CollectorService);
     expect(moduleRef.get(SourceScheduler)).toBeInstanceOf(SourceScheduler);
@@ -242,24 +281,16 @@ describe('CollectorsModule 的依赖图真的能建起来', () => {
   });
 
   it('`CollectorsModule` 导出了下游需要的两个 provider（Agent 14 集成时要用）', async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [CollectorsModule] })
-      .overrideProvider(PrismaService)
-      .useValue({})
-      .overrideProvider(SOURCE_LOCK)
-      .useValue(new InMemorySourceLock())
-      .overrideProvider(SOURCE_FETCH_QUEUE)
-      .useValue(new InMemorySourceFetchQueue())
-      .overrideProvider(COLLECTOR_CONFIG)
-      .useValue(testConfig())
-      .overrideProvider(WORKER_LOGGER)
-      .useValue(
-        createLogger({ service: 'di-test', level: 'silent', destination: createMemoryStream() }),
-      )
-      .compile();
+    const moduleRef = await compileCollectorsModule().compile();
 
     expect(moduleRef.get(CollectorService, { strict: false })).toBeDefined();
     expect(moduleRef.get(SourceScheduler, { strict: false })).toBeDefined();
     await moduleRef.close();
+  });
+
+  it('两个兜底扫描的间隔都 > 0（0 会让定时器空转、把数据库打满）', () => {
+    expect(NORMALIZE_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
+    expect(REVIEW_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
   });
 });
 

@@ -78,6 +78,26 @@ export interface ContentRepository {
   findContentIdByRawItemId(rawItemId: string): Promise<string | null>;
 
   /**
+   * 找出「已经落库、但还没有进内容流水线」的 RawItem id。
+   *
+   * 判据：`raw_items.status = FETCHED` 且**没有对应的 Content**
+   *（`contents.raw_item_id` 是唯一约束，一条 RawItem 最多一条 Content）。
+   *
+   * 这是 normalize 入口的**兜底取数口**（`ContentService.sweepForNormalize`），
+   * 存在两个理由：
+   *   - 采集器直接入队那一步失败（Redis 抖动 / 队列故障）时，数据不会永远卡住；
+   *   - 本入口补上之前已经积压在 `FETCHED` 的历史数据能被一次性收走。
+   *
+   * ⚠ **只挑 `FETCHED`**：`NORMALIZED` / `DUPLICATE` / `READY_FOR_ANALYSIS` /
+   * `FAILED` 都是已经处理过的终态，再入队只会重复跑一遍（虽然
+   * `content.normalize` 本身幂等，但那是白烧的查询与队列额度）。
+   *
+   * 返回十进制字符串（BIGINT 出库即 `String()`，与契约一致），按 id 升序 ——
+   * 先进先出，历史积压先被收走。
+   */
+  findRawItemsAwaitingNormalize(limit: number): Promise<string[]>;
+
+  /**
    * 创建 Content 并**在同一事务里**把 `raw_items.status` 推进到 `NORMALIZED`。
    *
    * 同一事务是必需的：否则可能出现「Content 建好了，RawItem 还是 FETCHED」，

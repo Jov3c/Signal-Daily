@@ -26,7 +26,7 @@ name: signal
 
 # ── 网络 ───────────────────────────────────────────────────────────────
 networks:
-  # 对外：只有 nginx 在这里。
+  # 对外服务：nginx 在这里，web / api 也在这里（nginx 要能连到它们）。
   edge:
     driver: bridge
   # 内部：mysql / redis **只**在这里。`internal: true` 让这个网络
@@ -34,6 +34,17 @@ networks:
   internal:
     driver: bridge
     internal: true
+  # 出站：**只给需要访问互联网、但不需要被 nginx 连到的组件**（目前只有 worker）。
+  #
+  # ⚠ 为什么不直接复用 `edge`：`edge` 是 nginx 所在的那张网。把它加给 worker
+  # 虽然能出网，但等于让采集/流水线进程与对外入口同处一个二层网络 —— 而这个
+  # 进程要处理的是**外部不可信内容**（RSS / X / 网页），是最不该和入口相邻的。
+  # 分一张 `egress` 就得到最小权限：能出网，但连不到 nginx。
+  #
+  # 注意 `api` 不在这里：nginx 必须能连到它，所以它必须在 `edge` 上，
+  # 而 `edge` 本身就有网关 —— 再给它加 `egress` 是多余的。
+  egress:
+    driver: bridge
 
 # ── 日志轮转（docs/15）────────────────────────────────────────────────
 x-logging: &default-logging
@@ -199,10 +210,14 @@ services:
     #   容器内 EAI_AGAIN
     # 即：**采集在部署形态下根本不可能工作** —— 而采集是这个产品的核心动作。
     #
-    # 同一个文件里 `api` 早就同时挂在 `edge, internal` 上（它也要出网去
-    # 外部 AI / X / GitHub），worker 漏了。加 `edge` 不引入任何入站暴露：
-    # worker 不 `ports:`、不监听端口（见下面的 healthcheck 注释）。
-    networks: [edge, internal]
+    # ⚠ **挂在 `egress` 上，不是 `edge`。** 第一版修复图省事直接加了 `edge`
+    # （api 就在那上面），但那是错的取舍：`edge` 是 nginx 所在的那张网，
+    # 而 worker 处理的正是**外部不可信内容**（RSS / X / 网页）—— 最不该
+    # 和对外入口同处一个二层网络。`egress` 给到同样的出网能力，但连不到 nginx。
+    #
+    # worker 仍然不 `ports:`、不监听端口（见下面的 healthcheck 注释），
+    # 所以它在哪张网上都不引入入站暴露；区别在**它能看见谁**。
+    networks: [internal, egress]
     env_file: *env-file
     environment:
       NODE_ENV: production

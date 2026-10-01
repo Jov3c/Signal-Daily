@@ -202,6 +202,52 @@ describe('findRawItemWithSource（真库 join + 枚举桥接）', () => {
   });
 });
 
+describe('findRawItemsAwaitingNormalize（入口兜底扫描的取数口，真库）', () => {
+  // ⚠ 这里一律用 `toContain` / `not.toContain` 而不是 `toHaveLength`：
+  // 这个方法按设计返回**全库**的积压（不只本测试造的），而真库里可能有
+  // 别的来源留下的 FETCHED 行。
+
+  it('返回 FETCHED 且还没有 Content 的 raw item id（十进制字符串）', async () => {
+    const a = await seedRawItem();
+    const b = await seedRawItem();
+
+    const ids = await repository.findRawItemsAwaitingNormalize(50);
+
+    expect(ids).toContain(a);
+    expect(ids).toContain(b);
+    for (const id of ids) expect(id).toMatch(/^\d+$/);
+  });
+
+  it('归一化之后就不再被返回（有 Content = 已经进过流水线）', async () => {
+    const done = await seedRawItem();
+    const pending = await seedRawItem();
+    await service.normalize(done);
+
+    const ids = await repository.findRawItemsAwaitingNormalize(50);
+
+    expect(ids).not.toContain(done);
+    expect(ids).toContain(pending);
+  });
+
+  it('非 FETCHED 的状态不被返回（FAILED / DUPLICATE 都是终态）', async () => {
+    const failed = await seedRawItem({ status: RawItemStatus.FAILED });
+    const duplicate = await seedRawItem({ status: RawItemStatus.DUPLICATE });
+
+    const ids = await repository.findRawItemsAwaitingNormalize(50);
+
+    expect(ids).not.toContain(failed);
+    expect(ids).not.toContain(duplicate);
+  });
+
+  it('limit 真的生效（只取前 N 条）', async () => {
+    await seedRawItem();
+    await seedRawItem();
+    await seedRawItem();
+
+    await expect(repository.findRawItemsAwaitingNormalize(2)).resolves.toHaveLength(2);
+  });
+});
+
 describe('Normalize 端到端（真库写入）', () => {
   it('RawItem → Content，RawItem 状态推进到 NORMALIZED', async () => {
     const rawItemId = await seedRawItem();

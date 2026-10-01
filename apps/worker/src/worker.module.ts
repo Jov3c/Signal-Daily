@@ -13,9 +13,13 @@
  * ```text
  * CollectorsModule       → new Worker('collector')          + SourceScheduler（OnApplicationBootstrap 起定时器）
  * AiWorkerModule         → new Worker('ai')
- * ContentPipelineModule  → new Worker('content-pipeline')   + 60 秒收尾扫描
+ * ContentPipelineModule  → new Worker('content-pipeline')   + 60 秒 normalize 兜底扫描 + 60 秒收尾扫描
  * PublishingModule       → new Worker('publishing')         + PublishingScheduler 定时器
  * ```
+ *
+ * ⚠ `CollectorsModule` 自己 `imports` 了 `ContentPipelineModule`（采集器要把
+ * 新写入的 RawItem 交给 `content.normalize`，见那边的说明）—— 这里再 import
+ * 一次是**同一个模块实例**，Nest 会去重，不会起第二个消费者或第二个定时器。
  *
  * 所以它们**全部**会先问一遍 `shouldStartConsumers()`（`common/consumers.ts`）。
  * 那是本次集成做的**唯一一个跨模块决策** —— 四个模块的文件头都写着

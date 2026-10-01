@@ -20,6 +20,10 @@
  *   - 测试：`Test.createTestingModule({imports:[CollectorsModule]})`
  *     后 `.overrideProvider(...)` 换成内存替身，**不需要 MySQL / Redis**，
  *     但仍然跑的是真实的 service / scheduler / worker 代码。
+ *
+ * ⚠ 本模块 imports 了 `ContentPipelineModule`（把新写入的 RawItem 交给
+ * `content.normalize`，见 `@Module` 装饰器上的说明）。这让「单独编译本模块」
+ * 不再与内容模块无关：DI 守卫测试要连它的基础设施 provider 一起 override。
  */
 
 import { Module } from '@nestjs/common';
@@ -31,11 +35,14 @@ import { COLLECTOR_SERVICE, CollectorWorker } from './collector.worker';
 import { WORKER_LOGGER, createWorkerLogger } from './logger';
 import {
   JOB_RUN_REPOSITORY,
+  NORMALIZE_ENQUEUER,
   RAW_ITEM_REPOSITORY,
   SOURCE_FETCH_QUEUE,
   SOURCE_LOCK,
   SOURCE_REPOSITORY,
 } from './ports';
+import { ContentPipelineModule } from '../content/module';
+import { CONTENT_ENQUEUER } from '../content/content-enqueuer';
 import { PrismaCollectorSourceRepository } from './prisma-source.repository';
 import { PrismaJobRunRepository } from './prisma-job-run.repository';
 import { PrismaRawItemRepository } from './prisma-raw-item.repository';
@@ -45,8 +52,31 @@ import { RedisSourceLock } from './source-lock';
 import { BullSourceFetchQueue } from './source-queue';
 
 @Module({
+  // ── 为什么 imports 里是 ContentPipelineModule ─────────────────────────
+  // 采集器存完 RawItem 之后要把它们交给 `content.normalize`（否则流水线
+  // 永远停在 raw → 见 `ports.ts` 的 `NormalizeEnqueuer`）。那个模块已经
+  // `exports: [ContentService, CONTENT_REPOSITORY, CONTENT_ENQUEUER]`，
+  // 所以这里 import 一次、再用 `useExisting` 把它的 `CONTENT_ENQUEUER`
+  // 接到采集器自己的窄端口上即可（下一项的 provider）。
+  //
+  // 依赖方向是**单向**的（collectors → content）；`ContentPipelineModule`
+  // 的 `imports` 是空数组，不存在环。重复 import 无害：Nest 对同一个模块类
+  // 只建一个实例，`worker.module.ts` 里那份与这里那份是同一个。
+  //
+  // ⚠ 代价：单独 `Test.createTestingModule({imports:[CollectorsModule]})`
+  // 现在会一起实例化内容模块的 provider（含 `parseEnv()` 与两个 BullMQ
+  // `Queue` 工厂）。`NODE_ENV=test` 只关闭**消费者与定时器**，不阻止
+  // provider 实例化 —— 所以 DI 守卫测试需要额外 override 这些 provider，
+  // 理由与 `collectors-di-wiring.spec.ts` 顶上写的一样。
+  imports: [ContentPipelineModule],
   providers: [
     PrismaService,
+
+    // 采集器的窄端口 → 内容模块的入队实现。
+    // `useExisting` 而不是 `useClass`：不需要第二个 `BullContentEnqueuer`
+    // 实例（它持有两个 Queue），同一个对象在两个 token 下可见即可。
+    { provide: NORMALIZE_ENQUEUER, useExisting: CONTENT_ENQUEUER },
+
 
     // 配置与基础设施
     { provide: COLLECTOR_CONFIG, useFactory: () => createCollectorConfig() },

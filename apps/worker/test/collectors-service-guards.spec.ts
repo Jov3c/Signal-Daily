@@ -26,6 +26,7 @@ import {
 import {
   FakeClock,
   InMemoryJobRunRepository,
+  InMemoryNormalizeEnqueuer,
   InMemoryRawItemRepository,
   InMemorySourceLock,
   InMemorySourceRepository,
@@ -91,6 +92,9 @@ function buildService(options: {
     lock,
     registry,
     createLogger({ service: 'collector-guard-test', level: 'info', destination: logStream }),
+    // 流水线入口用替身：本文件验的是「真适配器 × 真 service × 真守卫」
+    // 那条路径，入队行为本身由 `collectors-service.spec.ts` 覆盖。
+    new InMemoryNormalizeEnqueuer(),
   );
 
   return { service, sources, rawItems, jobRuns, logStream };

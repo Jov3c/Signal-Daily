@@ -80,6 +80,45 @@ function healthcheckBlock(serviceBlockText) {
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
+/**
+ * 取一个服务 `networks:` 里列出的网络名。两种写法都支持：
+ * `networks: [a, b]` 与 `networks:\n  - a\n  - b`。
+ */
+function serviceNetworks(source, service) {
+  const block = serviceBlock(source, service);
+  const inline = /networks:\s*\[([^\]]*)\]/.exec(block)?.[1];
+  if (inline !== undefined) {
+    return inline
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => name !== '');
+  }
+  const list = /networks:\s*\n((?:\s*-\s*\S+\s*\n?)+)/.exec(block)?.[1];
+  if (list === undefined) return [];
+  return [...list.matchAll(/-\s*(\S+)/g)].map((match) => match[1]);
+}
+
+/**
+ * 顶层 `networks:` 块里，哪些网络声明了 `internal: true`（= **没有出站路由**）。
+ *
+ * ⚠ 从网络定义**推导**，而不是写死 `internal` / `egress` 这些名字：
+ * 将来换名字不会误报，而「某个网络被设成 internal」这件事一定被看见。
+ */
+function internalOnlyNetworks(source) {
+  // 顶层那个是 `\nnetworks:`（顶格）；服务里的缩进 4 空格，不会误匹配。
+  const start = source.indexOf('\nnetworks:');
+  if (start === -1) return [];
+  const rest = source.slice(start + 1);
+  const end = rest.slice(1).search(/\n[a-z][a-z0-9_-]*:/);
+  const block = end === -1 ? rest : rest.slice(0, end + 1);
+  // 块内每个网络是 2 空格缩进的键
+  return block
+    .split(/\n {2}(?=[a-z][a-z0-9_-]*:)/)
+    .slice(1)
+    .filter((part) => /internal:\s*true/.test(part))
+    .map((part) => part.slice(0, part.indexOf(':')));
+}
+
 function read(relative) {
   const path = `${ROOT}${relative}`;
   if (!existsSync(path)) return null;
@@ -132,6 +171,38 @@ if (compose !== null) {
   check(
     'compose: internal 网络是 internal: true（没有出站路由）',
     /internal:[\s\S]{0,80}?internal: true/.test(compose),
+  );
+
+  /**
+   * ⚠⚠ **worker 必须有出网能力** —— 本文件里最容易被「看起来对」骗过去的一条。
+   *
+   * 守的是一个真实事故（2026-10-01）：worker 原本只挂 `internal`，
+   * 而 `internal: true` 掐断的**恰恰是出站**。于是**全栈唯一必须访问互联网的
+   * 组件**（抓 RSS / X / GitHub / HN / HF，以及调 AI Provider）连 DNS 都出不去：
+   *
+   * ```text
+   *   SOURCE_FETCH_FAILED: … Source host could not be resolved
+   *                        (DNS_RESOLUTION_FAILED)
+   * ```
+   *
+   * 而它的后果之所以恶劣，是因为**表面上一切正常**：
+   * `docker compose ps` 显示 worker **healthy** —— 那个 healthcheck 只跑
+   * `test -d /proc/1`，只能证明 PID 1 还活着，证明不了它有业务能力。
+   * 采集全废，但没有任何一处报错。
+   *
+   * 所以必须有东西拦着它被改回去。判据是**性质**而不是名字：
+   * worker 的 `networks:` 里至少要有一个不是 `internal: true` 的网络。
+   */
+  const workerNetworks = serviceNetworks(compose, 'worker');
+  const noEgress = internalOnlyNetworks(compose);
+  const outbound = workerNetworks.filter((name) => !noEgress.includes(name));
+  check(
+    'compose: worker 有出网能力（不能只挂 internal）',
+    workerNetworks.length > 0 && outbound.length > 0,
+    `worker 当前挂在 [${workerNetworks.join(', ')}]，其中没有一个是能出网的` +
+      `（internal: true 的网络没有任何出站路由）。` +
+      ' worker 要抓 RSS / X / GitHub / HN / HF 并调 AI Provider ——' +
+      ' 没有出站能力时采集会永久失败，而 docker compose ps 仍然显示 healthy。',
   );
 }
 
@@ -204,7 +275,10 @@ if (bootstrap !== null) {
   // ⚠ 第一版写成 `\([^)]*exclude` —— 那是错的：实参里就有 `API_PREFIX.slice(1)`
   // 这个括号，`[^)]*` 在它那里就停了，于是永远报失败。
   // 这里按「同一行内」匹配，够用且不会被跨行吞掉。
-  check('bootstrap: setGlobalPrefix 带了 exclude', /setGlobalPrefix\s*\([^\n]*exclude/.test(bootstrap));
+  check(
+    'bootstrap: setGlobalPrefix 带了 exclude',
+    /setGlobalPrefix\s*\([^\n]*exclude/.test(bootstrap),
+  );
   check(
     'bootstrap: exclude 用的是健康模块导出的路由表（不是手写字面量）',
     /HEALTH_ROUTE_EXCLUSIONS/.test(bootstrap),
@@ -221,7 +295,6 @@ if (compose !== null) {
     url ?? '（未找到 URL）',
   );
 }
-
 
 /* ------------------------------------------------------------------ */
 /* Dockerfile：多阶段 + 不含 secret                                     */
@@ -243,12 +316,19 @@ check('infra/nginx/README.md 存在（compose 与 nginx.conf 都指向它）', n
 if (nginxReadme !== null) {
   // 指南必须覆盖那个真正的坑：证书不存在时 nginx 起不来，而 ACME 又需要
   // nginx 提供 80。只写「用 certbot 签一张」是不够的。
-  check('TLS 指南讲了首次部署的自签占位（否则新机器起不来）', /openssl req -x509/.test(nginxReadme));
+  check(
+    'TLS 指南讲了首次部署的自签占位（否则新机器起不来）',
+    /openssl req -x509/.test(nginxReadme),
+  );
   check('TLS 指南讲了续期', /renew/.test(nginxReadme));
 }
 
 // compose 与 nginx.conf 里提到的仓库内文件都必须存在（悬空引用守卫）。
-for (const referenced of ['infra/nginx/README.md', 'infra/nginx/nginx.conf', 'infra/mysql/my.cnf']) {
+for (const referenced of [
+  'infra/nginx/README.md',
+  'infra/nginx/nginx.conf',
+  'infra/mysql/my.cnf',
+]) {
   check(`compose 引用的 ${referenced} 存在`, read(referenced) !== null);
 }
 

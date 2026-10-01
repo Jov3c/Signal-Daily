@@ -9,9 +9,14 @@
  * ④ 交给适配器 fetch
  * ⑤ 去重（批内 + 库内）
  * ⑥ 落 RawItem
- * ⑦ 推进 next_fetch_at / last_* 状态
- * ⑧ 记 JobRun
+ * ⑦ 把**新写入的**条目入队 content.normalize（raw → pipeline 的入口）
+ * ⑧ 推进 next_fetch_at / last_* 状态
+ * ⑨ 记 JobRun
  * ```
+ *
+ * ⚠ 第 ⑦ 步是本次补上的**缺口入口**：在这之前，`content-pipeline` 队列
+ * 从未收到过任何任务，`raw_items` 全部停在 `FETCHED`、`contents` 恒为 0。
+ * 见 `ports.ts` 的 `NormalizeEnqueuer` 与下面 `enqueueForPipeline` 的说明。
  *
  * ── 为什么 `runCollect` **不向调用方抛预期内的失败** ────────────────
  * 「上游超时」「来源被删了」「锁被占」都不是程序缺陷，而是**采集的常态**。
@@ -40,6 +45,7 @@ import { contentHashOf, sha256Hex } from './hashing';
 import { WORKER_LOGGER } from './logger';
 import {
   JOB_RUN_REPOSITORY,
+  NORMALIZE_ENQUEUER,
   RAW_ITEM_REPOSITORY,
   SOURCE_LOCK,
   SOURCE_REPOSITORY,
@@ -49,6 +55,7 @@ import {
   type CollectorSourceRepository,
   type JobRunRepository,
   type NewRawItem,
+  type NormalizeEnqueuer,
   type RawItemRepository,
   type SourceLock,
 } from './ports';
@@ -97,6 +104,9 @@ export class CollectorService {
     @Inject(SOURCE_LOCK) private readonly lock: SourceLock,
     @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
     @Inject(WORKER_LOGGER) private readonly logger: Logger,
+    // 内容流水线的入口（raw → normalize）。用本模块自己的端口而不是
+    // `ContentService` —— 见 `ports.ts` 的 `NormalizeEnqueuer`。
+    @Inject(NORMALIZE_ENQUEUER) private readonly pipeline: NormalizeEnqueuer,
   ) {}
 
   /**
@@ -215,12 +225,15 @@ export class CollectorService {
       });
 
       // ⑤⑥ 去重 + 落库
-      const { stored, duplicates, skippedByLength, truncatedFields, deferred } = await this.persist(
-        source,
-        batch.items,
-        startedAt,
-        batch.roundLimit,
-      );
+      const { stored, duplicates, skippedByLength, truncatedFields, deferred, rawItemIds } =
+        await this.persist(source, batch.items, startedAt, batch.roundLimit);
+
+      // ⑥⁺ 落库之后**立即**把新写入的条目交给内容流水线（raw → normalize）。
+      // 这是 `docs/17` 核心链路上原本缺失的一环 —— 在补上它之前，
+      // `raw_items` 会永远停在 FETCHED、`contents` 恒为 0。
+      // 为什么入队失败不炸这一轮采集：见 `enqueueForPipeline`。
+      await this.enqueueForPipeline(rawItemIds, sourceId);
+
       if (deferred > 0) {
         // 「留到下一轮」不是丢失 —— 窗口会随轮次向下推进（见 types.ts 的
         // `roundLimit` 说明）。但管理员应当知道这一轮的 `maxItems` 把
@@ -401,6 +414,8 @@ export class CollectorService {
     truncatedFields: string[];
     /** 因为每轮上限而**留到下一轮**的条数（不是丢失 —— 下一轮会继续取）。 */
     deferred: number;
+    /** 本次真正写入库的 raw item id（去重命中的、被丢掉的都不在其中）。 */
+    rawItemIds: string[];
   }> {
     if (items.length === 0) {
       return {
@@ -409,6 +424,7 @@ export class CollectorService {
         skippedByLength: 0,
         truncatedFields: [],
         deferred: 0,
+        rawItemIds: [],
       };
     }
 
@@ -429,8 +445,9 @@ export class CollectorService {
       const canonicalUrlHash = sha256Hex(canonicalUrl);
 
       // 外部输入的字段长度收敛到列宽以内。
-      // 不做的话**一条坏条目会让整批失败**（`createMany` 是全有或全无），
-      // 而且这个来源此后每一轮都失败 —— 症状只是「这个来源一直是空的」。
+      // 不做的话**一条坏条目会让整批失败**（整批写入在同一个事务里，
+      // 是全有或全无），而且这个来源此后每一轮都失败 ——
+      // 症状只是「这个来源一直是空的」。
       //
       // ⚠ 顺序很重要：**先**把字段收敛到列宽，**再**做批内去重。
       //
@@ -503,6 +520,7 @@ export class CollectorService {
         skippedByLength,
         truncatedFields: [...new Set(truncatedFields)],
         deferred: 0,
+        rawItemIds: [],
       };
     }
 
@@ -529,12 +547,69 @@ export class CollectorService {
     const fresh = limit === null ? freshAll : freshAll.slice(0, limit);
     const deferred = freshAll.length - fresh.length;
 
+    const rawItemIds = await this.rawItems.insertMany(fresh);
+
     return {
-      stored: await this.rawItems.insertMany(fresh),
+      stored: rawItemIds.length,
       duplicates,
       skippedByLength,
       truncatedFields: [...new Set(truncatedFields)],
       deferred,
+      rawItemIds,
     };
+  }
+
+  /**
+   * 把本次**新写入**的 RawItem 交给内容流水线的 normalize 阶段。
+   *
+   * ── 为什么只入队「新写入的」────────────────────────────────────────
+   * `persist` 返回的 `rawItemIds` 已经排除了去重命中的条目：那些不是新内容，
+   * 库里已经有了它们，归一化要么早就跑过（幂等命中）、要么会被内容侧的
+   * 兜底扫描收走。对它们入队只会产生一次注定走「alreadyExisted」分支的空跑。
+   *
+   * ── ⚠ 入队失败为什么不炸这一轮采集 ────────────────────────────────
+   * 走到这里时 RawItem **已经写进库了** —— 采集本身是成功的。把它收敛成
+   * `SOURCE_FETCH_FAILED` 会做两件错事：
+   *   1. 往 `sources.last_error_code` 写一个**假错误**（后台显示「这个源抓取失败」）；
+   *   2. 白吃一次重试 —— 而重试**补不上**这次入队：第二轮这些条目会被
+   *      「先查后写」的去重挡掉，`rawItemIds` 里根本不会再出现它们。
+   *
+   * 真正兜底的是内容侧的 `ContentService.sweepForNormalize`：它按
+   * 「status = FETCHED 且没有对应 Content」把这些条目捞回来，最多晚一个扫描
+   * 周期（见 `content/module.ts`）。所以这里**不抛**，但**不静默** ——
+   * 逐条记录 error 日志并汇总一条 warn，让「队列挂了」在日志里依然可见
+   *（`content-enqueuer.ts` 说「入队失败必须被看见」，这条规则没变，
+   * 只是处置方式从「让作业重试」换成了「交给兜底扫描」）。
+   *
+   * 逐条 try/catch 而不是整批一个：一条入队失败不该让后面 49 条也不入队。
+   */
+  private async enqueueForPipeline(rawItemIds: readonly string[], sourceId: string): Promise<void> {
+    if (rawItemIds.length === 0) return;
+
+    let failed = 0;
+    for (const rawItemId of rawItemIds) {
+      try {
+        await this.pipeline.enqueueNormalize(rawItemId);
+      } catch (error) {
+        failed += 1;
+        this.logger.error(
+          { sourceId, rawItemId, err: serializeError(error) },
+          'collector could not enqueue content.normalize; the sweep will pick it up',
+        );
+      }
+    }
+
+    if (failed > 0) {
+      this.logger.warn(
+        { sourceId, queued: rawItemIds.length - failed, failed },
+        'some raw items were not handed to the content pipeline',
+      );
+      return;
+    }
+
+    this.logger.info(
+      { sourceId, queued: rawItemIds.length },
+      'raw items handed to the content pipeline',
+    );
   }
 }

@@ -380,9 +380,13 @@ describe('RawItem 幂等 —— 真库上的「先查后写」', () => {
     const sourceId = await createTestSource({ slug: 'idem-nounique' });
     const item = newRawItem(sourceId, { externalId: 'dup' });
 
-    await rawItems.insertMany([item]);
+    const firstIds = await rawItems.insertMany([item]);
+    expect(firstIds).toHaveLength(1);
     // 第二次直接插入**会成功** —— 真库不拦。拦住它的是服务层的先查后写。
-    await expect(rawItems.insertMany([item])).resolves.toBe(1);
+    const secondIds = await rawItems.insertMany([item]);
+    expect(secondIds).toHaveLength(1);
+    // 两次拿到的是**不同**的 id（真库确认插了两行，而不是同一条被查回两次）。
+    expect(secondIds[0]).not.toBe(firstIds[0]);
 
     const count = await prisma.rawItem.count({
       where: { sourceId: BigInt(sourceId), externalId: 'dup' },
@@ -430,7 +434,35 @@ describe('RawItem 幂等 —— 真库上的「先查后写」', () => {
   });
 
   it('空数组不触发任何写操作', async () => {
-    await expect(rawItems.insertMany([])).resolves.toBe(0);
+    await expect(rawItems.insertMany([])).resolves.toEqual([]);
+  });
+
+  /**
+   * `insertMany` 现在返回新写入的 id（采集器要用它们把 RawItem 交给
+   * 内容流水线）。这条在真库上钉住「查回来的 id 确实是刚插进去的那几行」——
+   * MySQL 上 `createManyAndReturn` 不可用，实现是插入后按本批的键查回来，
+   * 所以这里必须验证 id 与行能对上。
+   */
+  it('返回的 id 就是刚写入的那几行（MySQL 上没有 createManyAndReturn）', async () => {
+    const sourceId = await createTestSource({ slug: 'idem-return-ids' });
+    const items = [
+      newRawItem(sourceId, { externalId: 'ret-1' }),
+      newRawItem(sourceId, { externalId: 'ret-2' }),
+      newRawItem(sourceId, { externalId: 'ret-3' }),
+    ];
+
+    const ids = await rawItems.insertMany(items);
+
+    expect(ids).toHaveLength(3);
+    // 每个 id 都能查出对应那一行，且 externalId 覆盖本批的三个。
+    const rows = await prisma.rawItem.findMany({
+      where: { id: { in: ids.map((id) => BigInt(id)) } },
+      select: { id: true, externalId: true },
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.externalId).sort()).toEqual(['ret-1', 'ret-2', 'ret-3']);
+    // 十进制字符串（契约里 BIGINT 的形态），不是 number。
+    for (const id of ids) expect(id).toMatch(/^\d+$/);
   });
 });
 

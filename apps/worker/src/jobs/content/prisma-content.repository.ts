@@ -102,6 +102,22 @@ export class PrismaContentRepository implements ContentRepository {
     return row === null ? null : String(row.id);
   }
 
+  async findRawItemsAwaitingNormalize(limit: number): Promise<string[]> {
+    const rows = await this.prisma.rawItem.findMany({
+      where: {
+        status: toPrismaRawItemStatus(RawItemStatus.FETCHED),
+        // `RawItem.content` 是 `Content.rawItemId` 的反向一对一（可空）。
+        // 有 Content = 这条已经归一化过，不该再被兜底扫描捞起来。
+        content: { is: null },
+      },
+      select: { id: true },
+      // 先进先出：先积压的先被收走（也是 `findContentsAwaitingReview` 的同款风格）。
+      orderBy: { id: 'asc' },
+      take: limit,
+    });
+    return rows.map((row) => String(row.id));
+  }
+
   async createContentAndAdvance(input: NewContent): Promise<PersistOutcome> {
     const rawItemId = toBindableId(input.rawItemId);
     const sourceId = toBindableId(input.sourceId);

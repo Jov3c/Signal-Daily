@@ -699,6 +699,77 @@ describe('AI 衔接 + Review Queue（S6）', () => {
   });
 });
 
+describe('入口兜底扫描（sweepForNormalize）', () => {
+  it('把「FETCHED 且没有 Content」的 RawItem 全部入队，并返回条数', async () => {
+    const { service, repository, enqueuer } = buildService();
+    repository.seedRawItem({ rawItemId: '42' });
+    repository.seedRawItem({ rawItemId: '43' });
+
+    const queued = await service.sweepForNormalize();
+
+    expect(queued).toBe(2);
+    expect(enqueuer.normalized).toEqual(['42', '43']);
+    // 扫描**只入队**，不写库 —— 落库是 normalize 作业自己的事。
+    expect(repository.writes).toHaveLength(0);
+  });
+
+  it('已经有 Content 的 RawItem 不再被扫到（幂等：不重复入队已处理的）', async () => {
+    const { service, repository, enqueuer } = buildService();
+    repository.seedRawItem({ rawItemId: '42' });
+    repository.seedRawItem({ rawItemId: '43' });
+    await service.normalize('42'); // 建出 Content，42 被推进到 NORMALIZED
+    enqueuer.normalized.length = 0;
+
+    const queued = await service.sweepForNormalize();
+
+    expect(queued).toBe(1);
+    expect(enqueuer.normalized).toEqual(['43']);
+  });
+
+  it('非 FETCHED 的状态（FAILED / DUPLICATE）不再入队', async () => {
+    const { service, repository, enqueuer } = buildService();
+    repository.seedRawItem({ rawItemId: '42' });
+    repository.seedRawItem({ rawItemId: '43', status: RawItemStatus.FAILED });
+    repository.seedRawItem({ rawItemId: '44', status: RawItemStatus.DUPLICATE });
+
+    const queued = await service.sweepForNormalize();
+
+    expect(queued).toBe(1);
+    expect(enqueuer.normalized).toEqual(['42']);
+  });
+
+  it('没有积压时返回 0，不产生任何入队', async () => {
+    const { service, enqueuer } = buildService();
+
+    expect(await service.sweepForNormalize()).toBe(0);
+    expect(enqueuer.normalized).toHaveLength(0);
+  });
+
+  it('尊重 limit（一次只收这么多，剩下的下个周期继续）', async () => {
+    const { service, repository, enqueuer } = buildService();
+    for (const id of ['1', '2', '3', '4', '5']) repository.seedRawItem({ rawItemId: id });
+
+    expect(await service.sweepForNormalize(2)).toBe(2);
+    expect(enqueuer.normalized).toHaveLength(2);
+  });
+
+  it('入队失败**抛出去**（由 module 的定时器记 error），条目仍是 FETCHED → 下轮重试', async () => {
+    const { service, repository, enqueuer } = buildService();
+    repository.seedRawItem({ rawItemId: '42' });
+    enqueuer.failNormalize = new Error('Redis 挂了');
+
+    await expect(service.sweepForNormalize()).rejects.toThrow('Redis 挂了');
+
+    // 没有 Content、状态没变 —— 所以下一轮扫描还会捞到它。兜底扫描天生可重试。
+    expect(repository.statusOf('42')).toBe(RawItemStatus.FETCHED);
+    expect(repository.contentCount()).toBe(0);
+
+    enqueuer.failNormalize = null;
+    expect(await service.sweepForNormalize()).toBe(1);
+    expect(enqueuer.normalized).toEqual(['42']);
+  });
+});
+
 describe('写入范围', () => {
   it('Pipeline 的 Normalize 只写 contents 与 raw_items', async () => {
     const { service, repository } = buildService();

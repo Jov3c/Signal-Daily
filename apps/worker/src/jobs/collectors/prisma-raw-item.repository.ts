@@ -76,10 +76,10 @@ export class PrismaRawItemRepository implements RawItemRepository {
     return { externalIds, canonicalUrlHashes };
   }
 
-  async insertMany(items: NewRawItem[]): Promise<number> {
-    if (items.length === 0) return 0;
+  async insertMany(items: NewRawItem[]): Promise<string[]> {
+    if (items.length === 0) return [];
 
-    const data = [];
+    const data: Prisma.RawItemUncheckedCreateInput[] = [];
     for (const item of items) {
       const sourceId = toBindableId(item.sourceId);
       // 超界/畸形的 sourceId 已经在选源时被挡掉，走到这里说明状态不一致 ——
@@ -103,9 +103,35 @@ export class PrismaRawItemRepository implements RawItemRepository {
       });
     }
 
-    if (data.length === 0) return 0;
+    if (data.length === 0) return [];
 
-    const result = await this.prisma.rawItem.createMany({ data });
-    return result.count;
+    // ── ⚠ 这里逐条 `create`，**不是** `createMany`，理由有两条 ──────────
+    //
+    // 1. `insertMany` 现在必须返回**新写入的 id**（采集器要用它们把
+    //    RawItem 交给内容流水线）。而 Prisma 6.19 的 `createManyAndReturn`
+    //    **不支持 MySQL**（只有 PostgreSQL / CockroachDB / SQLite 有）——
+    //    生成出来的 client 上 `rawItem` 根本没有这个方法；`raw_items.id`
+    //    又是自增 BIGINT，客户端算不出「刚才那批拿了哪些 id」。只有 `create`
+    //    会把 id 回来。
+    //
+    // 2. **插入后再按本批的键查回来是错的**（这是本实现的第二版；第一版
+    //    就是这么写的，被 `collectors-db.integration.spec.ts` 的真库用例
+    //    抓住）：`findExistingKeys` 只在**服务层**排除了已有的键，而
+    //    「同一个 (source_id, external_id) 已有旧行」时那条 OR 查询会把
+    //    **旧行的 id 也一起返回** —— 表现为 `stored` 被多算、并且把已经
+    //    处理过的 RawItem 又交给流水线跑一遍。
+    //    （`raw_items` 上没有唯一约束，同键多行是真实存在的，见文件头。）
+    //
+    // 同事务保证「全有或全无」的性质不变：任一条失败则整批回滚，
+    // 与原来的 `createMany` 一致。代价是 N 次往返 —— 每批受
+    // `maxItems` 限制（默认 50），且每来源每轮只跑一次，可以接受。
+    return this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const row of data) {
+        const created = await tx.rawItem.create({ data: row, select: { id: true } });
+        ids.push(String(created.id));
+      }
+      return ids;
+    });
   }
 }

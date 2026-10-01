@@ -441,6 +441,48 @@ export class ContentService {
   }
 
   /**
+   * 入口兜底扫描：把「已落库、但还没进流水线」的 RawItem 重新入队 normalize。
+   *
+   * ── 为什么需要它（流水线的**主**入口在采集器那边）──────────────────
+   * 正常路径是采集器存完 RawItem 后立刻 `enqueueNormalize`
+   *（`collector.service.ts` 的 `enqueueForPipeline`）—— 低延迟，
+   * 不需要等扫描。但那条路有它的盲区：
+   *   - 入队那一步失败（Redis 抖动 / 队列故障）时，采集已经成功、
+   *     数据已经落库，那条 RawItem 就**不会**再有人来推它；
+   *   - 本入口补上之前，库里已经积压的 `FETCHED` 数据没有任何触发者。
+   *
+   * 所以这里按「status = FETCHED 且没有对应 Content」扫一遍补上。
+   * 语义与 `sweepForReview` 一致：**兜底**，不是主路径；调用频率见
+   * `module.ts`（`NORMALIZE_SWEEP_INTERVAL_MS`）。
+   *
+   * ── 幂等与「重复入队不是 bug」──────────────────────────────────────
+   * 两条路（采集器直投 + 本扫描）会重复入队同一批 raw item ——
+   * 这是**设计上允许的**，不要加锁：
+   *   - `normalizeJobId(rawItemId)` 保证同一条的 jobId 相同，BullMQ 会去重；
+   *   - 即便 JobId 因归一化规则升版本而不同，`normalize` 本身也是幂等的
+   *    （已有 Content 时走 `alreadyExisted` 分支，不重复写库）。
+   * 所以重复入队的代价是一次队列去重，而不是重复建 Content。
+   *
+   * @returns 本次入队的条数
+   */
+  async sweepForNormalize(limit = 50): Promise<number> {
+    const pending = await this.repository.findRawItemsAwaitingNormalize(limit);
+
+    for (const rawItemId of pending) {
+      // 入队失败**不吞**（与 `persistAndChain` 同一策略）：抛出去让调用方
+      //（`module.ts` 的定时器）记一条 error。失败的那条仍是 FETCHED，
+      // 下一个周期会再被扫到 —— 兜底扫描天生就是可重试的。
+      await this.enqueuer.enqueueNormalize(rawItemId);
+    }
+
+    if (pending.length > 0) {
+      this.logger.info({ count: pending.length }, 'normalize sweep queued raw items');
+    }
+
+    return pending.length;
+  }
+
+  /**
    * 收尾扫描：把「AI 已跑完」的内容推进到审核队列。
    *
    * ── 为什么需要一个扫描，而不是 AI 完成时回调 ──────────────────────
