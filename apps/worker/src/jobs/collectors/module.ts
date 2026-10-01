@@ -77,7 +77,6 @@ import { BullSourceFetchQueue } from './source-queue';
     // 实例（它持有两个 Queue），同一个对象在两个 token 下可见即可。
     { provide: NORMALIZE_ENQUEUER, useExisting: CONTENT_ENQUEUER },
 
-
     // 配置与基础设施
     { provide: COLLECTOR_CONFIG, useFactory: () => createCollectorConfig() },
     { provide: CLOCK, useValue: systemClock },

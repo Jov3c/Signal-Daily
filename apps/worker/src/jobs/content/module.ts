@@ -150,9 +150,7 @@ export class ContentPipelineModule implements OnModuleInit, OnModuleDestroy {
     this.normalizeSweepTimer = setInterval(() => {
       void this.service
         .sweepForNormalize()
-        .catch((error: unknown) =>
-          this.logger.error({ err: error }, 'normalize sweep failed'),
-        );
+        .catch((error: unknown) => this.logger.error({ err: error }, 'normalize sweep failed'));
     }, NORMALIZE_SWEEP_INTERVAL_MS);
 
     // ── 收尾扫描 ──────────────────────────────────────────────────

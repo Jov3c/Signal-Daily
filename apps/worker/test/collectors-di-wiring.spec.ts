@@ -241,30 +241,32 @@ function compileCollectorsModule() {
     destination: createMemoryStream(),
   });
 
-  return Test.createTestingModule({ imports: [CollectorsModule] })
-    .overrideProvider(PrismaService)
-    .useValue({})
-    .overrideProvider(SOURCE_LOCK)
-    .useValue(new InMemorySourceLock())
-    .overrideProvider(SOURCE_FETCH_QUEUE)
-    .useValue(new InMemorySourceFetchQueue())
-    .overrideProvider(CLOCK)
-    .useValue(systemClock)
-    .overrideProvider(COLLECTOR_CONFIG)
-    .useValue(testConfig())
-    .overrideProvider(WORKER_LOGGER)
-    .useValue(silent)
-    // ── 内容模块的基础设施（被 imports 带进来）────────────────────────
-    .overrideProvider(ContentPrismaService)
-    .useValue({})
-    .overrideProvider(CONTENT_QUEUE_CONNECTION)
-    .useValue({})
-    .overrideProvider(CONTENT_QUEUE)
-    .useValue({ add: async () => undefined })
-    .overrideProvider(AI_QUEUE)
-    .useValue({ add: async () => undefined })
-    .overrideProvider(CONTENT_LOGGER)
-    .useValue(silent);
+  return (
+    Test.createTestingModule({ imports: [CollectorsModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .overrideProvider(SOURCE_LOCK)
+      .useValue(new InMemorySourceLock())
+      .overrideProvider(SOURCE_FETCH_QUEUE)
+      .useValue(new InMemorySourceFetchQueue())
+      .overrideProvider(CLOCK)
+      .useValue(systemClock)
+      .overrideProvider(COLLECTOR_CONFIG)
+      .useValue(testConfig())
+      .overrideProvider(WORKER_LOGGER)
+      .useValue(silent)
+      // ── 内容模块的基础设施（被 imports 带进来）────────────────────────
+      .overrideProvider(ContentPrismaService)
+      .useValue({})
+      .overrideProvider(CONTENT_QUEUE_CONNECTION)
+      .useValue({})
+      .overrideProvider(CONTENT_QUEUE)
+      .useValue({ add: async () => undefined })
+      .overrideProvider(AI_QUEUE)
+      .useValue({ add: async () => undefined })
+      .overrideProvider(CONTENT_LOGGER)
+      .useValue(silent)
+  );
 }
 
 describe('CollectorsModule 的依赖图真的能建起来', () => {

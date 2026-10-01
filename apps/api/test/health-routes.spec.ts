@@ -433,11 +433,31 @@ function serviceBlock(source: string, service: string): string {
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
+/**
+ * 取一个服务块里 **`healthcheck:` 那一段**。与 `verify-deploy.mjs` 的同名函数同源。
+ *
+ * ⚠ 为什么不直接在服务块里取「第一个 URL」：**注释和别的配置值里都会出现 URL**。
+ * 2026-10-01 实测踩到：给 api 服务补 `APP_BASE_URL: ${PUBLIC_BASE_URL:-https://localhost}`
+ * （容器形态必需，否则 `AdminOriginGuard` 会把后台写操作全判成跨源）之后，
+ * 「服务块里第一个 URL」变成了它 —— 这条断言随即报
+ * `TypeError: Invalid URL`（`new URL()` 收到的是注释里的文字）。
+ *
+ * 断言要看的是 **healthcheck 里的那个 URL**，所以必须限定到这一段。
+ * 服务块内部的一级键是 4 空格缩进，下一个同级键就是边界。
+ */
+function healthcheckBlock(serviceBlockText: string): string {
+  const start = serviceBlockText.indexOf('healthcheck:');
+  if (start === -1) return '';
+  const rest = serviceBlockText.slice(start);
+  const next = rest.slice(1).search(/\n {4}[a-z][a-z0-9_-]*:/);
+  return next === -1 ? rest : rest.slice(0, next + 1);
+}
+
 describe('⚠ compose / 运维脚本 / nginx 里的路径必须与代码里的常量逐字一致', () => {
   const compose = readFileSync(join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
 
   it('compose 的 api healthcheck 打的正是 `/health/ready`', async () => {
-    const url = /https?:\/\/[^\s"'\\]+/.exec(serviceBlock(compose, 'api'))?.[0];
+    const url = /https?:\/\/[^\s"'\\]+/.exec(healthcheckBlock(serviceBlock(compose, 'api')))?.[0];
     expect(url, '没有在 api 服务块里找到 healthcheck URL').toBeDefined();
 
     const pathname = new URL(url ?? '').pathname;
