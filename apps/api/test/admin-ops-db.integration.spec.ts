@@ -461,7 +461,26 @@ describe('AI 用量与成本（真表 ai_runs）', () => {
 
   it('最近调用按 createdAt DESC、id 与 contentId 都是 string', async () => {
     const recent = await repository.aiUsageRecent(20);
-    expect(recent).toHaveLength(20);
+
+    /**
+     * ⚠ **不断言「恰好 20 条」。**
+     *
+     * `ai_runs` 是**共享表**，条数取决于库里累积了多少 —— 本机跑过很多轮，
+     * 20+；而干净的 CI 库里只有本文件造的 7 条。2026-10-02 第一次把集成测试
+     * 放进 CI 时，这条当场红：
+     *
+     * ```text
+     *   expected [ { id: '5', …(12) }, …(6) ] to have a length of 20 but got 7
+     * ```
+     *
+     * 这是本仓库记过好几次的同一个坑（「共享库上的断言必须是**增量**，
+     * 不是绝对值」，见 `admin-ops` 的 jobType 那条）。那条断言想验的其实不是
+     * 「库里有 20 条」，而是**这条查询自己的契约**：`limit` 生效、时间倒序、
+     * id / contentId 的类型是 string 而不是 BigInt。这些与库里有多少行无关。
+     */
+    expect(recent.length).toBeLessThanOrEqual(20);
+    // 反向：本文件确实造了数据，所以不该是空的 —— 否则上面全恒真。
+    expect(recent.length).toBeGreaterThan(0);
 
     const times = recent.map((row) => new Date(row.createdAt).getTime());
     expect([...times].sort((a, b) => b - a)).toEqual(times);

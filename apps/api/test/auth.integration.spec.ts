@@ -11,7 +11,7 @@
  *   连不上就直接失败，绝不静默跳过。
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -180,22 +180,39 @@ function post(path: string, body: unknown, cookie?: string): Promise<Response> {
 /* 用例                                                                */
 /* ------------------------------------------------------------------ */
 
-describe('真实 env → 配置装配', () => {
-  it('用仓库 .env 走真实的 parseEnv 能构造出配置（本机未配 GitHub / SMTP）', async () => {
-    const { parseEnv } = await import('@signal/config');
-    const env = parseEnv(process.env);
-    const real = buildAuthConfig(env);
+/**
+ * ⚠ **这条只在「有仓库 `.env`」的机器上有意义** —— 2026-10-02 补。
+ *
+ * 它验的是「**本机那份 `.env`** 能被 `parseEnv` 接受并装配成合法配置」
+ *（用例名字里那个「本机未配 GitHub / SMTP」就是这个意思）。
+ *
+ * 而 CI 里**没有** `.env` —— 它被 gitignore，那是**设计**，不是缺陷。
+ * 强行跑只会得到 `EnvValidationError`：那验的不是代码，是「CI 上没有那个文件」。
+ * 第一次把集成测试放进 CI 时这条当场红，才发现它从来没写明这个前提。
+ *
+ * 按文件是否存在**显式**跳过 —— 不是静默：vitest 会把它报成 skipped，看得见。
+ */
+const HAS_REPO_DOT_ENV = existsSync(`${REPO_ROOT}/.env`);
 
-    expect(real.accessTokenSecret).not.toBe('change-me');
-    expect(real.refreshTokenPepper).not.toBe('change-me');
-    expect(real.emailOtpPepper).not.toBe('change-me');
-    expect(real.nodeEnv).toBe(env.NODE_ENV);
-    // 本地 .env 没有 GITHUB_CLIENT_ID / SMTP_HOST → 两个通道都应为 null，
-    // 于是 /auth/github 返回 503、OTP 走开发用控制台投递。
-    expect(real.github).toBeNull();
-    expect(real.smtp).toBeNull();
-    expect(real.secureCookies).toBe(env.NODE_ENV === 'production');
-  });
+describe('真实 env → 配置装配', () => {
+  it.skipIf(!HAS_REPO_DOT_ENV)(
+    '用仓库 .env 走真实的 parseEnv 能构造出配置（本机未配 GitHub / SMTP）',
+    async () => {
+      const { parseEnv } = await import('@signal/config');
+      const env = parseEnv(process.env);
+      const real = buildAuthConfig(env);
+
+      expect(real.accessTokenSecret).not.toBe('change-me');
+      expect(real.refreshTokenPepper).not.toBe('change-me');
+      expect(real.emailOtpPepper).not.toBe('change-me');
+      expect(real.nodeEnv).toBe(env.NODE_ENV);
+      // 本地 .env 没有 GITHUB_CLIENT_ID / SMTP_HOST → 两个通道都应为 null，
+      // 于是 /auth/github 返回 503、OTP 走开发用控制台投递。
+      expect(real.github).toBeNull();
+      expect(real.smtp).toBeNull();
+      expect(real.secureCookies).toBe(env.NODE_ENV === 'production');
+    },
+  );
 });
 
 describe('真实 MySQL：Email OTP 全流程', () => {
