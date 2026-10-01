@@ -565,3 +565,93 @@ describe('/today：featured 按分数、latest 按时间（口径必须不同）
     expect(rows.map((row) => row.id)).not.toContain(String(noDateId));
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Topic 计数：只算已公开（2026-10-01 修）                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⚠ 这个 `describe` 守的是一个**信息泄露**，不只是显示 bug：
+ *
+ * `listTopics()` 与 `findTopicBySlug()` 的 `_count` 此前**不带任何状态过滤**，
+ * 而同一文件里的 `listTopicContents()` 明确只取 `APPROVED`。于是：
+ *
+ * ```text
+ *   主题列表说「有 N 篇」
+ *   点进去只列出 M 篇（M < N）
+ * ```
+ *
+ * 用户能从 N - M 反推出**还有多少内容在审核队列里 / 被驳回了多少** ——
+ * `docs/12` 的 Public-only 要求前台只反映已发布的部分。
+ */
+describe('Topic 计数：只算 APPROVED（与 listTopicContents 同一口径）', () => {
+  const TOPIC_SLUG = `topic-count-${SUFFIX}`;
+  let topicId: bigint;
+  let approvedA: bigint;
+  let approvedB: bigint;
+
+  beforeAll(async () => {
+    const topic = await prisma.topic.create({
+      data: { name: `TopicCount ${SUFFIX}`, slug: TOPIC_SLUG },
+      select: { id: true },
+    });
+    topicId = topic.id;
+
+    // 两条已公开 + 四种未公开状态各一条 —— 只应数到那两条。
+    const statuses: [string, ContentPipelineStatus][] = [
+      ['approved-a', ContentPipelineStatus.APPROVED],
+      ['approved-b', ContentPipelineStatus.APPROVED],
+      ['pending', ContentPipelineStatus.REVIEW_PENDING],
+      ['rejected', ContentPipelineStatus.REJECTED],
+      ['archived', ContentPipelineStatus.ARCHIVED],
+      ['analyzing', ContentPipelineStatus.ANALYZING],
+      ['ingested', ContentPipelineStatus.INGESTED],
+    ];
+
+    const ids: Record<string, bigint> = {};
+    for (const [label, status] of statuses) {
+      ids[label] = await makeContent({
+        label: `topic-${label}`,
+        sourceId: rssSourceId,
+        status,
+        finalScore: 80,
+      });
+    }
+    approvedA = ids['approved-a'] ?? 0n;
+    approvedB = ids['approved-b'] ?? 0n;
+
+    await prisma.contentTopic.createMany({
+      data: Object.values(ids).map((contentId) => ({ contentId, topicId, confidence: 1 })),
+    });
+  });
+
+  afterAll(async () => {
+    // `contentTopics` 随 content 级联删除（见 schema 的 onDelete: Cascade），
+    // 但 topic 本身不在文件末尾那个 afterAll 的清理范围里，这里自己收。
+    await prisma.topic.deleteMany({ where: { id: topicId } });
+  });
+
+  it('⚠ listTopics 的计数只算 APPROVED（旧实现下这条必红）', async () => {
+    const topics = await repository.listTopics();
+    const mine = topics.find((topic) => topic.slug === TOPIC_SLUG);
+    expect(mine).toBeDefined();
+    // 旧实现会数到 7（全部状态），泄露 5 条内部候选。
+    expect(mine?.contentCount, '未公开的内容不该被计数').toBe(2);
+  });
+
+  it('⚠ findTopicBySlug 的计数与 listTopics 一致', async () => {
+    const topic = await repository.findTopicBySlug(TOPIC_SLUG);
+    expect(topic?.contentCount).toBe(2);
+  });
+
+  it('计数的口径与「详情实际列出的条数」一致', async () => {
+    const topic = await repository.findTopicBySlug(TOPIC_SLUG);
+    const contents = await repository.listTopicContents({ topicId, limit: 50 });
+
+    expect(contents.map((row) => row.id).sort()).toEqual(
+      [String(approvedA), String(approvedB)].sort(),
+    );
+    // 这条才是清单要的「两个口径一致」：计数 === 列出的条数。
+    expect(topic?.contentCount).toBe(contents.length);
+  });
+});

@@ -439,9 +439,39 @@ export class PrismaPublicReadRepository implements PublicReadRepository {
     return rows.map((row) => this.toContent(row as ContentPrismaRow, summaries));
   }
 
+  /**
+   * ⚠ 计数**必须**与 `listTopicContents()` 同一口径（只算 `APPROVED`）—— 2026-10-01 修。
+   *
+   * 原来这里（与 `findTopicBySlug`）是裸的 `_count: { select: { contentTopics: true } }`，
+   * **不带任何状态过滤**，而同一个文件里的 `listTopicContents()` 明确写了
+   * `pipelineStatus: APPROVED`。于是同一次请求里：
+   *
+   * ```text
+   *  主题列表说「这个主题有 37 篇」
+   *  点进去只列出 12 篇            ← 两个数字对不上
+   * ```
+   *
+   * 那不只是一个显示 bug：它**泄露内部候选数量** —— 用户能从计数反推出还有多少
+   * 内容正在审核队列里（`REVIEW_PENDING`），或者被驳回了多少（`REJECTED`）。
+   * `docs/12` 的「Public-only」要求前台只反映已发布的部分。
+   *
+   * 修法与同文件的 `listPeople` / `findPersonBySlug` 一致 —— 它们**一直是对的**，
+   * 只有 topics 这两个漏了。
+   */
   async listTopics(): Promise<(PublicTopicRow & { contentCount: number })[]> {
     const rows = await this.prisma.topic.findMany({
-      select: { id: true, name: true, slug: true, _count: { select: { contentTopics: true } } },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        _count: {
+          select: {
+            contentTopics: {
+              where: { content: { pipelineStatus: ContentPipelineStatus.APPROVED } },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
     });
     return rows.map((row) => ({
@@ -452,10 +482,22 @@ export class PrismaPublicReadRepository implements PublicReadRepository {
     }));
   }
 
+  /** 计数口径见 `listTopics()` 的注释 —— 两者必须一致。 */
   async findTopicBySlug(slug: string): Promise<(PublicTopicRow & { contentCount: number }) | null> {
     const row = await this.prisma.topic.findUnique({
       where: { slug },
-      select: { id: true, name: true, slug: true, _count: { select: { contentTopics: true } } },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        _count: {
+          select: {
+            contentTopics: {
+              where: { content: { pipelineStatus: ContentPipelineStatus.APPROVED } },
+            },
+          },
+        },
+      },
     });
     if (row === null) return null;
     return {
