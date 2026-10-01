@@ -154,6 +154,19 @@ services:
 
   # ── API ──────────────────────────────────────────────────────────────
   api:
+    # ⚠ `image:` 与 `build:` **并存**，这是 `docs/16` 那条设计的落点 —— 2026-10-01 补。
+    #
+    # 在此之前三个 app 服务**只有 `build:`**，于是部署 workflow 里
+    # `docker compose pull api worker web` 无物可拉，`up` 会在 VPS 上**从源码重建** ——
+    # 「CI 构建镜像 → VPS pull」这条链**从未真正闭环**：VPS 跑的版本与 CI 构建的
+    # SHA 没有任何关系，回滚也就无从谈起。`gh run list` 显示这条流水线此前
+    # 13 次全失败（先是镜像 tag 大小写、后是 Dockerfile 缺 prisma generate），
+    # 所以这个缺口一直没暴露。
+    #
+    # `IMAGE_TAG` 由部署 workflow 注入（`${{ github.sha }}`，回滚时用 `.last-good-tag`）。
+    # 本地不设它 → 落成 `:local`，配合 `docker compose up -d --build` 用本地构建的镜像 ——
+    # 本地开发路径**不受影响**。
+    image: ghcr.io/jov3c/signal-daily/api:${IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: infra/Dockerfile
@@ -188,12 +201,15 @@ services:
 
   # ── Worker ───────────────────────────────────────────────────────────
   worker:
+    # ⚠ 同 `api`：`image:` + `build:` 并存，${IMAGE_TAG} 由部署 workflow 注入。
+    # 少了这一行，VPS 就永远用不到 CI 构建的镜像（见 `api` 上的长注释）。
+    image: ghcr.io/jov3c/signal-daily/worker:${IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
-    # ⚠ **必须也在 `edge` 上** —— 2026-10-01 修。
+    # ⚠ **必须有一张能出网的网络** —— 2026-10-01 修。
     #
     # 这里原本写的是「worker **不需要** edge：它不出网给用户（出网只去外部 API）」，
     # 并只挂 `internal`。那行注释把两件事混为一谈了：
@@ -238,6 +254,8 @@ services:
 
   # ── Web ──────────────────────────────────────────────────────────────
   web:
+    # ⚠ 同 `api`：`image:` + `build:` 并存，${IMAGE_TAG} 由部署 workflow 注入。
+    image: ghcr.io/jov3c/signal-daily/web:${IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: infra/Dockerfile

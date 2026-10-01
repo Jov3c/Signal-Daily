@@ -204,6 +204,65 @@ if (compose !== null) {
       ' worker 要抓 RSS / X / GitHub / HN / HF 并调 AI Provider ——' +
       ' 没有出站能力时采集会永久失败，而 docker compose ps 仍然显示 healthy。',
   );
+
+  /**
+   * ⚠⚠ **三个 app 服务必须有 `image:`，且必须带 `${IMAGE_TAG}`。**
+   *
+   * 守的是 `docs/16` 那条设计有没有真的闭环：
+   *
+   * ```text
+   *   CI 构建镜像 → VPS `docker compose pull` → `up`
+   * ```
+   *
+   * 2026-10-01 查证时发现**它从来没闭环过**：三个 app 只有 `build:`，
+   * 于是 `compose pull` 无物可拉，`up` 会在 VPS 上**从源码重建** ——
+   * 「CI 构建的那个 SHA」与「VPS 实际跑的版本」再无关系，回滚也无从谈起。
+   */
+  const appServices = ['api', 'worker', 'web'];
+  const imageLines = new Map(
+    appServices.map((name) => [
+      name,
+      /\n {4}image:[^\n]*/.exec(serviceBlock(compose, name))?.[0] ?? '',
+    ]),
+  );
+
+  check(
+    'compose: api / worker / web 都有 image:',
+    appServices.every((name) => imageLines.get(name) !== ''),
+    '少了它，`docker compose pull` 无物可拉，VPS 会在本地从源码重建 ——' +
+      ' CI 构建的镜像与实际运行的版本不闭环，回滚也无从谈起。',
+  );
+
+  check(
+    'compose: 三个 app 的 image 都带 ${IMAGE_TAG}',
+    appServices.every((name) => (imageLines.get(name) ?? '').includes('${IMAGE_TAG')),
+    '少了它，部署时注入的 github.sha 与 .last-good-tag 落不到镜像上 ——' +
+      ' 切版本与回滚都会变成空操作。',
+  );
+
+  check(
+    'compose: 三个 app 的 image 各自指向对应的 target',
+    appServices.every((name) => (imageLines.get(name) ?? '').includes(`/${name}:`)),
+    '镜像名末尾应当是对应的服务名（api / worker / web），别是复制粘贴错的。',
+  );
+
+  /**
+   * ⚠ 直接把**那条让流水线 13 次全失败的规矩**写成断言。
+   *
+   * `ghcr.io` 的引用名必须全小写。仓库叫 `Jov3c/Signal-Daily`（有大写），
+   * 而 buildx 在这里报的不是「名字不合法」而是
+   * `repository name must be lowercase` —— 挂在**打 tag** 那一步，
+   * 三条 build 全部作废。此前每一次推送都死在这一行。
+   */
+  check(
+    'compose: 镜像名前缀是全小写（GHCR 拒绝大写）',
+    appServices.every((name) => {
+      const path = /image:\s*([^\s:]+)/.exec(imageLines.get(name) ?? '')?.[1] ?? '';
+      return path !== '' && path === path.toLowerCase();
+    }),
+    'GHCR 的引用名必须全小写 —— 含大写时 buildx 报 ' +
+      '"repository name must be lowercase"，且挂在打 tag 那一步，三条 build 全部作废。',
+  );
 }
 
 /* ------------------------------------------------------------------ */
