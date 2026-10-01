@@ -463,3 +463,105 @@ describe('Evidence Summary（docs/04 / docs/06 / docs/22）', () => {
     expect(await repository.findEventEvidence(999_999_999n)).toBeNull();
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* featured vs latest：排序口径必须不同（2026-10-01 修）                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⚠ 这个 `describe` 守的是一个**真实缺陷**：
+ *
+ * `listByWindow()` 此前把 `orderBy` 写死成 `[finalScore DESC, publishedAt DESC]`，
+ * 而 `/today` 的 `featured` 与 `latest` **都走它** —— 于是「当日最新」实际是按
+ * **分数**排的，与 `TodayView.latest` 自己的文档（「按发布时间倒序」）直接矛盾。
+ *
+ * 修法是把排序抽成**必填**参数 `sort: 'score' | 'latest'`（不设默认值 ——
+ * 有默认值的话，调用方不写就会悄悄退回旧的错误语义）。
+ *
+ * **旧实现下 `latest` 那条必红**：它会拿到 95 分的旧文章而不是新的那条。
+ */
+describe('/today：featured 按分数、latest 按时间（口径必须不同）', () => {
+  // ⚠ 用一个**固定的过去时间窗**，与文件里其它用例的 `publishedAt: new Date()`
+  // 完全隔开 —— 否则那些内容会混进结果里，让断言依赖执行顺序。
+  const START = new Date('2020-01-01T00:00:00.000Z');
+  const END = new Date('2020-01-03T00:00:00.000Z');
+
+  // 清单指定的构造：「旧文章 95 分，新文章 60 分」。
+  let oldHighId: bigint;
+  let newLowId: bigint;
+
+  beforeAll(async () => {
+    oldHighId = await makeContent({
+      label: 'order-old-high',
+      sourceId: rssSourceId,
+      status: ContentPipelineStatus.APPROVED,
+      publishedAt: new Date('2020-01-01T10:00:00.000Z'),
+      finalScore: 95,
+    });
+    newLowId = await makeContent({
+      label: 'order-new-low',
+      sourceId: rssSourceId,
+      status: ContentPipelineStatus.APPROVED,
+      publishedAt: new Date('2020-01-02T10:00:00.000Z'),
+      finalScore: 60,
+    });
+  });
+
+  it('featured（sort=score）：旧的高分文章排在新的低分文章前面', async () => {
+    const rows = await repository.listByWindow({
+      startUtc: START,
+      endUtc: END,
+      limit: 10,
+      sort: 'score',
+    });
+    expect(rows.map((row) => row.id)).toEqual([String(oldHighId), String(newLowId)]);
+  });
+
+  it('⚠ latest（sort=latest）：新的低分文章必须排前面（旧实现下这条必红）', async () => {
+    const rows = await repository.listByWindow({
+      startUtc: START,
+      endUtc: END,
+      limit: 10,
+      sort: 'latest',
+    });
+    // 旧实现把 orderBy 写死成分数优先 —— 这里拿到的会是 95 分那条旧文章。
+    expect(rows.map((row) => row.id)).toEqual([String(newLowId), String(oldHighId)]);
+  });
+
+  it('latest 的口径是「时间」而不是「分数」：把分数反过来也不改变顺序', async () => {
+    // 把新的那条降成更低分、旧的那条升到更高分，顺序仍应只看时间。
+    await prisma.content.update({ where: { id: newLowId }, data: { finalScore: 1 } });
+    await prisma.content.update({ where: { id: oldHighId }, data: { finalScore: 99 } });
+
+    const rows = await repository.listByWindow({
+      startUtc: START,
+      endUtc: END,
+      limit: 10,
+      sort: 'latest',
+    });
+    expect(rows.map((row) => row.id)).toEqual([String(newLowId), String(oldHighId)]);
+  });
+
+  it('latest 把「没有发布时间」的条目排在最后（MySQL DESC 下 NULL 本就在最后）', async () => {
+    const noDateId = await makeContent({
+      label: 'order-no-date',
+      sourceId: rssSourceId,
+      status: ContentPipelineStatus.APPROVED,
+      publishedAt: undefined, // 见下：makeContent 会落成 `new Date()`
+      finalScore: 100, // 分数最高，若排序看分数它就会跑到最前
+    });
+    // ⚠ `makeContent` 的 `publishedAt` 默认是 `new Date()`，所以上面那条其实**有时间**。
+    // 这里显式改成 null，才是这条用例要验的形状。
+    await prisma.content.update({ where: { id: noDateId }, data: { publishedAt: null } });
+
+    const rows = await repository.listByWindow({
+      startUtc: START,
+      endUtc: END,
+      limit: 10,
+      sort: 'latest',
+    });
+    // 它是 `publishedAt: null` 且 `createdAt` 不在窗口内 —— 所以**根本不进结果**，
+    // 而不是「排在最后」。这条断言把那个边界说清楚。
+    expect(rows.map((row) => row.id)).not.toContain(String(noDateId));
+  });
+});

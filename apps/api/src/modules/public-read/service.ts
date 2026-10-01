@@ -90,9 +90,18 @@ export class PublicReadService {
         startUtc,
         endUtc,
         limit: TODAY_FEATURED_LIMIT,
+        // 当日**高分** —— 按 finalScore。
+        sort: 'score',
         minScore: TODAY_FEATURED_MIN_SCORE,
       }),
-      this.repository.listByWindow({ startUtc, endUtc, limit: TODAY_LATEST_LIMIT }),
+      this.repository.listByWindow({
+        startUtc,
+        endUtc,
+        limit: TODAY_LATEST_LIMIT,
+        // ⚠ 当日**最新** —— 按发布时间。此前这里没传 `sort`（那时它写死按分数），
+        // 于是「最新」实际按分数排，与 `TodayView.latest` 的文档矛盾。
+        sort: 'latest',
+      }),
     ]);
 
     const view: TodayView = { businessDate, featured, latest };

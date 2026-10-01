@@ -141,8 +141,38 @@ export class PrismaPublicReadRepository implements PublicReadRepository {
     startUtc: Date;
     endUtc: Date;
     limit: number;
+    sort: 'score' | 'latest';
     minScore?: number;
   }): Promise<PublicContentRow[]> {
+    /**
+     * ⚠ **排序按 `sort` 分岔 —— 2026-10-01 修。**
+     *
+     * 此前只有一条写死的 `[finalScore DESC, publishedAt DESC]`，`/today` 的
+     * `latest` 也走它 —— 于是「当日最新」其实是**按分数**排的，与
+     * `TodayView.latest` 自己的文档（「按发布时间倒序」）矛盾。
+     *
+     * ⚠ `publishedAt` 可空（部分来源不给）。**MySQL 在 `DESC` 下把 NULL 排在最后**
+     *（它把 NULL 当作最小值），这正好是我们要的 —— 「没有发布时间的条目」不该
+     * 占据「最新」的第一屏。这里仍显式写出 `nulls: 'last'`：默认行为会随数据库
+     * 而变（Postgres 在 DESC 下恰好相反），写出来才不会被一次迁移静默改掉。
+     *
+     * ⚠ 两种排序都补了 `id DESC` 兜底：`finalScore` / `publishedAt` 都可能并列，
+     * 没有唯一列参与排序时翻页会**漏条或重复**（Agent 12 的 admin 列表里
+     * 记过同一个坑）。
+     */
+    const orderBy =
+      input.sort === 'latest'
+        ? [
+            { publishedAt: { sort: 'desc' as const, nulls: 'last' as const } },
+            { createdAt: 'desc' as const },
+            { id: 'desc' as const },
+          ]
+        : [
+            { finalScore: 'desc' as const },
+            { publishedAt: { sort: 'desc' as const, nulls: 'last' as const } },
+            { id: 'desc' as const },
+          ];
+
     const rows = await this.prisma.content.findMany({
       where: {
         pipelineStatus: ContentPipelineStatus.APPROVED,
@@ -155,7 +185,7 @@ export class PrismaPublicReadRepository implements PublicReadRepository {
         ...(input.minScore === undefined ? {} : { finalScore: { gte: input.minScore } }),
       },
       select: CONTENT_SELECT,
-      orderBy: [{ finalScore: 'desc' }, { publishedAt: 'desc' }],
+      orderBy,
       take: input.limit,
     });
     const summaries = await this.evidenceSummariesFor(rows as ContentPrismaRow[]);

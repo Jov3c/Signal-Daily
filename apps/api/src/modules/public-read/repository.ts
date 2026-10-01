@@ -106,13 +106,27 @@ export interface PublicReadRepository {
   findContentsByIds(ids: readonly bigint[]): Promise<PublicContentRow[]>;
 
   /**
-   * 某个时间窗内的可见内容，按 `finalScore DESC, publishedAt DESC` 排序。
-   * `/today` 用它取「当日最新」。
+   * 某个时间窗内的可见内容。排序由 `sort` **显式指定**。
+   *
+   * ```text
+   * sort: 'score'    按 finalScore DESC（`/today` 的 featured：当日高分）
+   * sort: 'latest'   按 publishedAt DESC（`/today` 的 latest：当日最新）
+   * ```
+   *
+   * ⚠ **`sort` 是必填的，故意不设默认值。** 2026-10-01 修一个真实缺陷时加的：
+   * 此前这里只有一个写死的 `finalScore DESC, publishedAt DESC`，而
+   * `/today` 的 `latest` 也走它 —— 于是「当日最新」实际是**按分数**排的，
+   * 与它自己的文档（`TodayView.latest` 写着「按发布时间倒序」）矛盾。
+   *
+   * 设默认值会让这个错误重新变得可能（调用方不写就悄悄退化成旧的错误语义）；
+   * 必填则**每个调用点都必须表态**自己按什么排。
    */
   listByWindow(input: {
     startUtc: Date;
     endUtc: Date;
     limit: number;
+    /** 见上。**必填**，不要给它默认值。 */
+    sort: 'score' | 'latest';
     minScore?: number;
   }): Promise<PublicContentRow[]>;
 
