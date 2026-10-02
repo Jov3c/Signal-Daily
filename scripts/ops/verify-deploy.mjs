@@ -524,6 +524,49 @@ if (deploy !== null) {
     'deploy: 没有硬编码的 secret（值必须来自 secrets 上下文）',
     !/(password|token|secret|key):\s*(?!\$\{\{)[^\s$]\S*/i.test(deployJob),
   );
+
+  /**
+   * ⚠⚠ **用到 `docker compose` 的每一步都必须注入 `IMAGE_TAG`。**
+   *
+   * 守的是 2026-10-02 找到的一个**会让部署永远失败**的缺陷：`Migration gate`
+   * 那一步漏了 `export IMAGE_TAG`。少了它，`docker compose run api` 会去解析
+   * `image:` 的默认值 `ghcr.io/jov3c/signal-daily/api:**local**` —— 而 VPS 上
+   * 从来没有过那个 tag（它只 pull 过带 SHA 的）→ compose 尝试去 GHCR 拉 `:local`
+   * → 不存在 → **migration gate 失败 → 每次部署都中止在「切应用」之前**。
+   *
+   * 本地完全看不出来：开发机上恰好有 `:local`（构建过）。
+   * 同一份文件里另外两个用到 compose 的步骤本来就写了这一行，**只有这里漏了**。
+   *
+   * 判据按**步骤**切（`- name:` 是边界），而不是全文计数 —— 计数会在
+   * 「一步写了两遍、另一步一遍没写」时误判为通过。
+   */
+  const deploySteps = deployJob.split(/\n\s*- name:/).slice(1);
+  const stepsMissingImageTag = deploySteps
+    // ⚠⚠ **必须先剥注释再断言** —— 这条守卫的第一版就是栽在这里的（我自己踩的）。
+    // 那个步骤的注释里写着「`export IMAGE_TAG` 不能少」，于是正则匹配到了**注释**，
+    // 守卫**假通过**：把真正的 export 删掉它也照样绿。
+    //
+    // 这是本仓库第三次遇到同一个坑（`ops:verify` 的 URL 扫描、`di-wiring` 的
+    // 构造参数扫描、这里是 `IMAGE_TAG`）。**规则：读源码文本做断言前先剥注释** ——
+    // 而这个仓库的习惯恰好是「把旧写法抄进注释里说明原来错在哪」，
+    // 不剥注释的断言会**在修复说明出现的那一刻失效**。
+    .map((step) => step.replace(/^[ \t]*#.*$/gm, ''))
+    .filter((step) => step.includes('docker compose'))
+    .filter(
+      // ⚠ **只认脚本里的 `export`**，不认 `envs:` —— 后者是把 **runner 环境**里的
+      // 变量转发到远端脚本，而 `IMAGE_TAG` 从来不在 runner 环境里（它由
+      // `${{ github.sha }}` 在脚本内联进去）。把 `envs:` 当合法路径会留一条
+      // **假通过**的路：写上去像是注入了，实际什么都没传。
+      (step) => !/export IMAGE_TAG/.test(step),
+    )
+    .map((step) => (step.split('\n')[0] ?? '').trim());
+  check(
+    'deploy: 每个用到 docker compose 的步骤都注入了 IMAGE_TAG',
+    stepsMissingImageTag.length === 0,
+    `缺 IMAGE_TAG 的步骤：${stepsMissingImageTag.join(' / ')} —— ` +
+      '少了它，compose 会去解析 image: 的默认值 `:local`，而 VPS 上从来没有过那个 tag，' +
+      '于是那一步必然失败。',
+  );
 }
 
 /* ------------------------------------------------------------------ */

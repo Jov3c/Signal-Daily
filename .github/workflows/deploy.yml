@@ -359,6 +359,21 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /opt/signal
+            # ⚠⚠ **`export IMAGE_TAG` 不能少** —— 2026-10-02 修，它此前**漏了**。
+            #
+            # 少了它，`docker compose run api` 会去解析 `image:` 的默认值，
+            # 而那是 `ghcr.io/jov3c/signal-daily/api:**local**` —— VPS 上从来
+            # 没有过这个 tag（它只 pull 过带 SHA 的）。compose 找不到本地镜像
+            # 就会尝试去 GHCR 拉 `:local` → 不存在 → **migration gate 失败 →
+            # 每次部署都中止在「切应用」之前**。
+            #
+            # 本地完全看不出来：开发机上恰好有 `:local`（构建过）。
+            # 另外两个用到 compose 的步骤（拉取新镜像 / 切换应用）本来就写了这一行，
+            # 只有这里漏了 —— 同一份文件里「一个写对两个写错」的又一例。
+            #
+            # ⚠ 回滚那一步用 `IMAGE_TAG="$PREV"`（上一版的 SHA），这里必须是**本次的** SHA，
+            # 否则迁移会跑在旧镜像上 —— 那正是 migration gate 要防的事。
+            export IMAGE_TAG=${{ github.sha }}
             docker compose run --rm --no-deps api npx prisma migrate deploy
 
       - name: 切换应用
@@ -371,6 +386,22 @@ jobs:
             cd /opt/signal
             export IMAGE_TAG=${{ github.sha }}
             docker compose up -d --no-deps api worker web
+            # ⚠⚠ **切完应用必须重载 nginx** —— 2026-10-02 修，它此前**漏了**。
+            #
+            # `infra/nginx/nginx.conf` 里是 `upstream signal_api { server api:3001; }`
+            # 这种写法：**nginx 在启动时把 `api` / `web` 解析成 IP 并缓存**。
+            # 而 `docker compose up` 重建容器会让它们**换 IP** —— nginx 于是继续
+            # 往旧 IP 转发，**每个请求 502**，直到有人重载它。
+            #
+            # 实测（本机照部署序列跑）：重建 api 后 `https://localhost/health/ready`
+            # → **502**；`docker compose restart nginx` 之后 → **200**。
+            #
+            # 少了这一步，部署会：切完应用 → 健康检查 502 → 判失败 → **回滚**，
+            # 而回滚那一步同样不重载 nginx，于是又 502 —— 循环。**每次都失败。**
+            #
+            # 用 `nginx -s reload` 而不是 `restart`：reload 是**平滑**的
+            #（旧 worker 处理完在途请求才退），restart 会断掉正在服务的连接。
+            docker compose exec -T nginx nginx -s reload
             ./scripts/ops/healthcheck.sh
 
       - name: 记住这一版的 tag（下次回滚用）
@@ -401,4 +432,7 @@ jobs:
             echo "回滚到 $PREV"
             export IMAGE_TAG="$PREV"
             docker compose up -d --no-deps api worker web
+            # ⚠ 回滚同样要重载（理由见「切换应用」那一步的长注释）——
+            # 否则回滚完还是 502，等于没回滚。
+            docker compose exec -T nginx nginx -s reload
             ./scripts/ops/healthcheck.sh
