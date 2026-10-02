@@ -46,6 +46,7 @@ import { PUBLISHING_LOGGER, PublishingService } from './publishing.service';
 import { PublishingQueueWorker } from './publishing.worker';
 import { PUBLISHING_ENQUEUER, PublishingScheduler } from './scheduler';
 import { PUBLISHING_QUEUE_NAME } from './queue-names';
+import { PrismaModule } from '../../common/prisma/prisma.module';
 
 /**
  * Redis 连接参数 provider。
@@ -61,8 +62,12 @@ const connectionProvider = {
 };
 
 @Module({
+  // ⚠ P3-02：不再在本模块 `providers` 里声明 `PublishingPrismaService`
+  //（它现在是全局 `WorkerPrismaService` 的别名）。唯一实例由 `@Global()` 的
+  // PrismaModule 提供；下面三个 `useFactory` 的 `inject: [PublishingPrismaService]`
+  // 通过全局导出解析到同一个对象，所以接线写法一行未改。
+  imports: [PrismaModule],
   providers: [
-    PublishingPrismaService,
     {
       provide: PUBLISHING_LOGGER,
       useFactory: () => createLogger({ service: 'worker', level: parseEnv().LOG_LEVEL }),

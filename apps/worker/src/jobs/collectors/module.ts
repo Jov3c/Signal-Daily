@@ -43,10 +43,10 @@ import {
 } from './ports';
 import { ContentPipelineModule } from '../content/module';
 import { CONTENT_ENQUEUER } from '../content/content-enqueuer';
+import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaCollectorSourceRepository } from './prisma-source.repository';
 import { PrismaJobRunRepository } from './prisma-job-run.repository';
 import { PrismaRawItemRepository } from './prisma-raw-item.repository';
-import { PrismaService } from './prisma.service';
 import { SourceScheduler } from './scheduler.service';
 import { RedisSourceLock } from './source-lock';
 import { BullSourceFetchQueue } from './source-queue';
@@ -68,10 +68,13 @@ import { BullSourceFetchQueue } from './source-queue';
   // `Queue` 工厂）。`NODE_ENV=test` 只关闭**消费者与定时器**，不阻止
   // provider 实例化 —— 所以 DI 守卫测试需要额外 override 这些 provider，
   // 理由与 `collectors-di-wiring.spec.ts` 顶上写的一样。
-  imports: [ContentPipelineModule],
+  //
+  // ⚠ P3-02：这里还 import 了 `PrismaModule`。它是 `@Global()` 的，但**仍要
+  // 被 import 进依赖图才生效**；本模块的 DI 守卫测试是单独编译本模块的，
+  // 所以不能只靠根模块 import。`PrismaService` 现在是 `WorkerPrismaService`
+  // 的别名（同一个 token），不再在本模块 `providers` 里重复声明。
+  imports: [ContentPipelineModule, PrismaModule],
   providers: [
-    PrismaService,
-
     // 采集器的窄端口 → 内容模块的入队实现。
     // `useExisting` 而不是 `useClass`：不需要第二个 `BullContentEnqueuer`
     // 实例（它持有两个 Queue），同一个对象在两个 token 下可见即可。

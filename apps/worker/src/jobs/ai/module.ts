@@ -34,12 +34,12 @@ import { Module, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common'
 import { shouldStartConsumers } from '../../common/consumers';
 import { createLogger } from '@signal/logger';
 import { parseEnv } from '@signal/config';
+import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AiService, AI_LOGGER } from './ai.service';
 import { AI_CONFIG, createAiConfig } from './ai.config';
 import { AI_CLOCK, SystemAiClock } from './clock';
 import { AI_REPOSITORY } from './ai-run.repository';
 import { PrismaAiRepository } from './prisma-ai-run.repository';
-import { WorkerPrismaService } from './prisma.service';
 import { AI_PROVIDER } from './provider/provider';
 import { OpenAiCompatibleProvider } from './provider/openai-compatible.provider';
 import { AiQueueWorker } from './ai.worker';
@@ -48,8 +48,12 @@ import { JOB_RUN_RECORDER } from './job-run.repository';
 import { PrismaJobRunRecorder } from './prisma-job-run.repository';
 
 @Module({
+  // ⚠ P3-02：不再在本模块 `providers` 里声明自己的 PrismaService ——
+  // 唯一实例由 `@Global()` 的 PrismaModule 提供（见 `src/common/prisma/`）。
+  // 两个仓储仍写 `@Inject(WorkerPrismaService)`，token 没变、只是 provider
+  // 变成了全局那一个，所以业务仓储一行未改。
+  imports: [PrismaModule],
   providers: [
-    WorkerPrismaService,
     { provide: AI_CONFIG, useFactory: () => createAiConfig(parseEnv()) },
     { provide: AI_CLOCK, useClass: SystemAiClock },
     {

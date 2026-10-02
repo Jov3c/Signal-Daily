@@ -37,9 +37,12 @@ export {
 } from './content.worker';
 
 /* docs/13 的 Dead Letter */
+// ⚠ P3-02：与 `jobs/ai/index.ts` 对齐 —— 两个**值**导出改用模块限定名，
+// 消除「同一个文件同时 import 两个 barrel 会撞名」的隐患（理由详见那边）。
+// 仓库内没有调用方用过裸名；`module.ts` 自己是从 `./job-run.repository` 取的。
 export {
-  JOB_RUN_RECORDER,
-  NoopJobRunRecorder,
+  JOB_RUN_RECORDER as CONTENT_JOB_RUN_RECORDER,
+  NoopJobRunRecorder as ContentNoopJobRunRecorder,
   type JobRunRecorder,
   type RecordJobRunInput,
 } from './job-run.repository';

@@ -70,13 +70,16 @@ export const CONTENT_QUEUE = 'CONTENT_QUEUE';
 export const AI_QUEUE = 'AI_QUEUE';
 import { CONTENT_REPOSITORY } from './ports';
 import { PrismaContentRepository } from './prisma-content.repository';
-import { ContentPrismaService } from './prisma.service';
 import { JOB_RUN_RECORDER } from './job-run.repository';
 import { PrismaJobRunRecorder } from './prisma-job-run.repository';
+import { PrismaModule } from '../../common/prisma/prisma.module';
 
 @Module({
+  // ⚠ P3-02：本模块不再声明自己的 `ContentPrismaService` —— 唯一实例来自
+  // `@Global()` 的 PrismaModule。`ContentPrismaService` 现在只是它的别名
+  //（同一个 token），两个仓储与 DI 守卫测试的写法都不用变。
+  imports: [PrismaModule],
   providers: [
-    ContentPrismaService,
     {
       provide: CONTENT_LOGGER,
       useFactory: () => createLogger({ service: 'worker', level: parseEnv().LOG_LEVEL }),

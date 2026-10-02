@@ -29,20 +29,38 @@
  * （`parseEnv()` 仍会跑，缺 env 仍会报错 —— 那是刻意的，见 `consumers.ts` 的边界说明）。
  *
  * ── ⚠ 从这里 import 的是各模块的 `module.ts`，不是它们的 `index.ts` ──
- * `jobs/ai/index.ts` 与 `jobs/content/index.ts` **都 re-export 了同名的**
- * `JOB_RUN_RECORDER` 与 `NoopJobRunRecorder`（两个模块各自的名字，绑定到各自的实现）。
- * 在同一个文件里同时从两个 index import 会撞名，需要 `as` 重命名 ——
- * 直接指到 `module.ts` 就没有这个问题，而且根模块本来也不该依赖业务模块的公开面。
+ * 根模块本来就不该依赖业务模块的公开面（公开面是给同层下游用的）。
+ *
+ * 顺带记一笔历史：`jobs/ai/index.ts` 与 `jobs/content/index.ts` 曾经**都**
+ * re-export 同名的 `JOB_RUN_RECORDER` 与 `NoopJobRunRecorder`，各自绑定到
+ * 各自的实现 —— 在同一个文件里同时从两个 index import 会撞名。
+ * P3-02 收敛时已按本仓库既有约定（`jobs/publishing` 的
+ * `PUBLISHING_JOB_RUN_RECORDER`）把两者改成**模块限定名**
+ *（`AI_JOB_RUN_RECORDER` / `CONTENT_JOB_RUN_RECORDER`，以及
+ * `AiNoopJobRunRecorder` / `ContentNoopJobRunRecorder`），撞名的名字不再存在。
+ *
+ * ── 数据库连接的所有权（P3-02）─────────────────────────────────────
+ * 四个模块不再各自持有 `PrismaClient`：唯一实例由 `@Global()` 的
+ * `PrismaModule`（`src/common/prisma/`）提供，`imports` 里显式列出是为了
+ * 让「根模块的依赖图里确实有这个 provider」一眼可见（四个 Job 模块自己也
+ * import 了它，Nest 会去重，不会产生第二个连接池）。
  */
 
 import { Module } from '@nestjs/common';
+import { PrismaModule } from './common/prisma/prisma.module';
 import { AiWorkerModule } from './jobs/ai/module';
 import { CollectorsModule } from './jobs/collectors/module';
 import { ContentPipelineModule } from './jobs/content/module';
 import { PublishingModule } from './jobs/publishing/module';
 
 @Module({
-  imports: [CollectorsModule, AiWorkerModule, ContentPipelineModule, PublishingModule],
+  imports: [
+    PrismaModule,
+    CollectorsModule,
+    AiWorkerModule,
+    ContentPipelineModule,
+    PublishingModule,
+  ],
   providers: [],
 })
 export class WorkerModule {}

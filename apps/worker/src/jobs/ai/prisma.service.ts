@@ -1,28 +1,17 @@
 /**
- * Worker 进程内的 Prisma 入口。
+ * AI 模块的数据库注入点 —— P3-02 之后是**全局单例的别名**，不再是第 N 份实现。
  *
- * ⚠ **这是一份重复实现，已记入 HANDOFF。**
- * `apps/api/src/common/prisma/prisma.service.ts` 是 Agent 02 落地的，
- * 但 `apps/api/src/**` 不在 worker 的 tsconfig 引用图里，
- * 跨 app import 会把 api 的整个源码树拖进 worker 的构建（`docs/02` 只允许共享 `packages/*`）。
- * Agent 04 也在 `jobs/collectors/prisma.service.ts` 里各建了一份。
+ * 实现已收敛到 `src/common/prisma/prisma.service.ts` 的 `WorkerPrismaService`，
+ * 由 `@Global()` 的 `PrismaModule` 提供。这里保留文件只是为了：
+ *   1. 注入点名字（`WorkerPrismaService`）与 import 路径不变 ——
+ *      `prisma-ai-run.repository.ts` / `prisma-job-run.repository.ts` 的
+ *      `@Inject(WorkerPrismaService)` 与 `module.ts` 的接线都不用改；
+ *   2. `ai-content-di-wiring.spec.ts` 的回归墓碑继续盯着这两个仓储的
+ *      显式 `@Inject`（那个守卫断言的是「写没写 @Inject」，与实现在哪里无关）。
  *
- * 建议 Agent 14 集成时把「worker 侧 PrismaService + 枚举桥接」提到共享包。
- * 在那之前，各模块保留自己的那份 —— 跨模块 import 会让两个 Job 目录
- * 的生命周期绑在一起，而这里只有二十行。
- *
- * 契约（与 api 侧一致，来自 Agent 02）：
- *   - 连接是**惰性**的：不在 `onModuleInit` 里 `$connect()`，
- *     这样只 override 仓储的单元测试不需要真实 MySQL 就能构造本 provider。
- *   - 主键 BIGINT UNSIGNED，取出来是 `bigint`，**出库必须 `String()`**。
+ * ⚠ 这里**不要**再出现 `class ... extends PrismaClient` ——
+ * 多一份实现就多一个连接池，正是 P3-02 要消除的东西。
+ * `test/prisma-singleton.spec.ts` 会静态断言整个 worker `src` 只有一处继承。
  */
 
-import { Injectable, type OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-
-@Injectable()
-export class WorkerPrismaService extends PrismaClient implements OnModuleDestroy {
-  async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
-  }
-}
+export { WorkerPrismaService } from '../../common/prisma/prisma.service';

@@ -37,9 +37,19 @@ export {
 } from './ai.worker';
 
 /* docs/13 的 Dead Letter：最终失败写 job_runs = DEAD */
+// ⚠ P3-02：这里的两个**值**导出改用模块限定名（`AI_` / `Ai` 前缀）。
+// 原来叫裸的 `JOB_RUN_RECORDER` / `NoopJobRunRecorder`，与
+// `jobs/content/index.ts` 的同名导出**撞名** —— 一个文件同时从两个 barrel
+// import 就必须 `as` 重命名，而两个名字绑的是**不同的实现**，重命名极易看错。
+// 本仓库已有的约定就是限定名（见 `jobs/publishing` 的
+// `PUBLISHING_JOB_RUN_RECORDER`），这里向它对齐。
+// 仓库内没有任何调用方用过裸名（它们都从 `./job-run.repository` 直接 import），
+// 所以这是一次零破坏的改名。
+// `JobRunRecorder` / `RecordJobRunInput` 两个**类型**保持原名：它们是刻意被
+// `jobs/publishing` 复用的端口形状，不是各模块不同的实现。
 export {
-  JOB_RUN_RECORDER,
-  NoopJobRunRecorder,
+  JOB_RUN_RECORDER as AI_JOB_RUN_RECORDER,
+  NoopJobRunRecorder as AiNoopJobRunRecorder,
   type JobRunRecorder,
   type RecordJobRunInput,
 } from './job-run.repository';
