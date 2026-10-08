@@ -67,7 +67,9 @@ export function DecisionPanel({
       setNote('');
       router.refresh();
     } catch (error) {
-      toast.show(error instanceof ApiClientError && error.isUnauthorized ? '请重新登录' : '操作失败');
+      toast.show(
+        error instanceof ApiClientError && error.isUnauthorized ? '请重新登录' : '操作失败',
+      );
     } finally {
       setBusy(false);
     }
@@ -117,7 +119,11 @@ export function EvidenceEditor({
   const router = useRouter();
   const toast = useToast();
 
-  async function call(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<void> {
+  async function call(
+    path: string,
+    method: 'POST' | 'PATCH' | 'DELETE',
+    body?: unknown,
+  ): Promise<void> {
     if (busy) return;
     setBusy(true);
     try {
@@ -137,8 +143,7 @@ export function EvidenceEditor({
     <div className="detail-block">
       <h2>证据链（人工纠正）</h2>
       <p className="subtle">
-        人工证据会保留 URL 与操作者审计。**不能伪造 Source** —— 这里只能改证据，
-        不能新增一个来源。
+        人工证据会保留 URL 与操作者审计。**不能伪造 Source** —— 这里只能改证据， 不能新增一个来源。
       </p>
 
       {evidences.length === 0 ? (
@@ -195,7 +200,14 @@ export function EvidenceEditor({
                       </>
                     )}
                   </td>
-                  <td className="subtle">{item.urlHash.slice(0, 10)}…</td>
+                  {/*
+                    ⚠ `urlHash` 可以为空 —— 2026-10-08 修。原来直接 `.slice(0, 10)`，
+                    只要有一条证据没带这个字段，**整页崩到错误边界**。
+                    （改了 `?` 与 `?? ''`：没有指纹时显示「—」而不是让页面挂掉。）
+                  */}
+                  <td className="subtle">
+                    {item.urlHash == null ? '—' : `${item.urlHash.slice(0, 10)}…`}
+                  </td>
                   <td>
                     <div className="row-actions">
                       {item.isPrimary ? null : (
@@ -238,7 +250,11 @@ export function EvidenceEditor({
       <h2 style={{ marginTop: '18px' }}>增加一条证据</h2>
       <label className="field">
         <span>URL（必填 —— 人工证据必须可追溯）</span>
-        <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" />
+        <input
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="https://…"
+        />
       </label>
       <label className="field">
         <span>标题（可选）</span>

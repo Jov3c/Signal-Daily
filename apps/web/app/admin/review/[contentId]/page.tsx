@@ -132,7 +132,9 @@ export default async function AdminReviewDetailPage({
                     推荐理由：{aiScore.recommendationReason}
                   </p>
                 )}
-                {aiScore.topics.length === 0 ? null : (
+                {/* ⚠ 同 `bodyTranslated` 那条：`== null` 同时挡住 null 与 undefined
+                    （`.length` 对 undefined 同样会崩）。 */}
+                {(aiScore.topics ?? []).length === 0 ? null : (
                   <p style={{ marginTop: '10px' }}>
                     {aiScore.topics.map((topic) => (
                       <span className="tag" key={topic}>
@@ -147,7 +149,29 @@ export default async function AdminReviewDetailPage({
 
           <section className="detail-block">
             <h2>翻译</h2>
-            {content.bodyTranslated === null ? (
+            {/*
+              ⚠ **守卫必须同时挡住 `null` 与 `undefined`** —— 2026-10-08 修。
+
+              原来写的是 `=== null`。而生产上真的崩了：
+
+              ```text
+                TypeError: Cannot read properties of undefined (reading 'slice')
+                at .next/server/app/admin/review/[contentId]/page.js
+              ```
+
+              也就是运行时拿到的是 **`undefined`** 而不是 `null`。
+              `=== null` 对 `undefined` 是 false，于是走进 else 分支调 `.slice` → 整页崩到
+              错误边界（用户看到的是「这一页需要向 Signal 的接口取数据…」）。
+
+              ⚠ 为什么会是 undefined 我没有查到根因（登不进后台复现）——
+              Prisma 对 NULL 列给的是 `null`，所以中间某一层（DTO / 序列化）把它变成了
+              undefined，或者字段整个没带上。**这类差异在类型上完全看不见**
+              （`bodyTranslated: string | null` 两个都不允许）。
+
+              所以这里用 `== null`（同时匹配 null 与 undefined）而不是 `=== null`，
+              并在取值处兜一层空串 —— **对两种形状都对，且不依赖那个未查清的根因**。
+            */}
+            {content.bodyTranslated == null || content.bodyTranslated === '' ? (
               <p className="subtle">没有译文。</p>
             ) : (
               <p style={{ whiteSpace: 'pre-wrap' }}>{content.bodyTranslated.slice(0, 1200)}</p>
@@ -156,7 +180,7 @@ export default async function AdminReviewDetailPage({
 
           <section className="detail-block">
             <h2>原文</h2>
-            {content.bodyOriginal === null ? (
+            {content.bodyOriginal == null || content.bodyOriginal === '' ? (
               <p className="subtle">没有正文（可能是只有摘要的条目）。</p>
             ) : (
               /*
@@ -181,7 +205,8 @@ export default async function AdminReviewDetailPage({
 
           <section className="detail-block">
             <h2>相似 / 重复内容</h2>
-            {detail.similarContents.length === 0 ? (
+            {/* ⚠ 同上：`== null` / `?? []` 同时挡住 null 与 undefined。 */}
+            {(detail.similarContents ?? []).length === 0 ? (
               <p className="subtle">这个事件里没有其它内容。</p>
             ) : (
               <>

@@ -1,0 +1,102 @@
+# ════════════════════════════════════════════════════════════════════════
+# ⚠ 本地演示覆盖层 —— **这不是部署形态，不要用在生产**。
+# ════════════════════════════════════════════════════════════════════════
+#
+# `docker-compose.yml`（部署形态）**一个字都不动** —— 本文件是它的覆盖层，
+# 只用 compose 的 `-f a.yml -f b.yml` 合并语义往上面加本地演示需要的东西。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+#   # 停止演示层（回到纯部署形态）：
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml down
+#
+# ── 它只做三件事，每一件都有明确理由 ────────────────────────────────
+#
+# 1. **起一个本地 mock AI**（`mock-ai` 服务）。
+#    部署形态下 worker 需要一个真实的 OpenAI-compatible 端点
+#    （`AI_DEFAULT_BASE_URL`）。本地演示没有、也不该有真实 key，
+#    所以用一个本地服务顶替。脚本见 `work/demo-ai-provider.mjs`。
+#
+# 2. **给 worker 注入 AI_* 环境变量**，指向那个 mock。
+#    `docker-compose.yml` 的 worker 段刻意不写 AI_* —— 生产上它们由 `.env`
+#    提供（见 `.env.example`），而本机的 `.env` 里这几项是空的，
+#    于是运行期表现为 `AI_NOT_CONFIGURED`（这正是那 501 条内容卡住的直接原因）。
+#    这里只覆盖 worker，不动 api/web。
+#
+# 3. **把 api 的 NODE_ENV 降成 development**。
+#    部署形态下 `NODE_ENV=production` 且未配 SMTP → `UnavailableMailSender`
+#    → `POST /auth/email/request-code` 返回 503 `AUTH_MAIL_NOT_CONFIGURED`
+#    （设计如此，见 `apps/api/src/modules/auth/mail-sender.ts` 文件头）。
+#    而「人工审核」是这个产品的核心，没有登录就没有后台，也就没有审核。
+#    降成 development 后走 `ConsoleMailSender`：验证码写进**容器 stderr**，
+#    用 `docker compose logs api | grep 'code='` 取。
+#    这是那个模块**为开发环境专门设计**的分支，不是绕过它。
+#    ⚠ 代价要说清楚：Secure cookie 标志会消失（`secureCookies = NODE_ENV === 'production'`），
+#      所以这一层**绝不能带到生产**。
+#
+# ── 明确不在这里做的事 ──────────────────────────────────────────────
+# - 不映射任何新端口到宿主（mock-ai 只在 internal 网络上，宿主连不到它，
+#   只有 worker 能连 —— 与「MySQL/Redis 不暴露宿主」同一取舍）。
+# - 不动 nginx（演示仍然是 https://localhost 一个入口）。
+# - 不改任何 Job 名 / 队列名 / 契约 / Prisma schema。
+
+services:
+  # ── 本地 mock AI（OpenAI-compatible）────────────────────────────────
+  mock-ai:
+    image: node:22-alpine
+    restart: unless-stopped
+    # 只挂 `internal`：它不需要出网，也不该被 nginx 连到。
+    # worker 同时在 `internal` 与 `egress` 上，所以 worker 能连它。
+    networks: [internal]
+    volumes:
+      # `:ro` —— mock 只读脚本，不写任何东西。
+      - ./work/demo-ai-provider.mjs:/app/demo-ai-provider.mjs:ro
+      # 预翻译文表（键 = 英文原标题）—— mock 用它把英文内容换成**真的中文译文**，
+      # 而不是把英文原样回显 / 加 `【译文】` 前缀。见 `work/demo-translations.mjs`
+      # 的文件头：翻译由人（Claude）预先做好，本机没有 AI key 也能演示
+      # 「英文资讯 → 中文」这条主路。
+      - ./work/demo-translations.mjs:/app/demo-translations.mjs:ro
+    command: ['node', '/app/demo-ai-provider.mjs']
+    environment:
+      DEMO_AI_PORT: '3899'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://127.0.0.1:3899/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
+
+  # ── api：让验证码落到容器日志（见文件头第 3 条）────────────────────
+  api:
+    environment:
+      NODE_ENV: development
+
+  # ── worker：把 AI 指向上面的 mock（见文件头第 2 条）─────────────────
+  worker:
+    environment:
+      AI_DEFAULT_PROVIDER: openai-compatible
+      # `openai-compatible.provider.ts` 请求 `${baseUrl}/chat/completions`；
+      # mock 两种写法都收（带不带 /v1）。
+      AI_DEFAULT_BASE_URL: http://mock-ai:3899/v1
+      AI_DEFAULT_API_KEY: demo-key
+      # ⚠ 模型名刻意用价格表里**真实存在**的 `gpt-4o-mini`（见
+      # `apps/worker/src/jobs/ai/pricing.ts` 的 MODEL_PRICE_TABLE）。
+      # 原因：未知模型走「刻意取高」的兜底价（$5 / $20 每百万 token），
+      # 用这个兜底价跑 1000+ 次任务会**真的撞上 AI_DAILY_BUDGET_USD**，
+      # 于是后半批任务被预算闸门拦下（AI_BUDGET_EXCEEDED）——
+      # 那不是我们想演示的失败。mock 不关心模型名，它原样回显。
+      AI_MODEL_CHEAP: gpt-4o-mini
+      AI_MODEL_MEDIUM: gpt-4o-mini
+      AI_MODEL_STRONG: gpt-4o-mini
+      # 演示期把日预算抬到 20 美元。`AI_DAILY_BUDGET_USD` 本来就是运维旋钮
+      # （docs/20），不是契约；抬高只是为了「一次演示不要中途被闸门打断」。
+      AI_DAILY_BUDGET_USD: '20'

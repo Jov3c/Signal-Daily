@@ -14,6 +14,11 @@ export default tseslint.config(
       '**/coverage/**',
       '**/*.tsbuildinfo',
       '**/next-env.d.ts',
+      // ⚠ `work/` 是项目约定的**临时目录**（`.gitignore` 与 `.dockerignore` 里都有它，
+      // README 也写着「临时文件放 work/」）。它此前**没被 lint 忽略** —— 于是
+      // 任何一个临时脚本都会把 `pnpm lint` 弄红，而那是与仓库无关的代码。
+      // 2026-10-08 补：演示脚本放进去之后 `pnpm lint` 当场就红了。
+      'work/**',
     ],
   },
   js.configs.recommended,
